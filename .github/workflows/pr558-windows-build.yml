@@ -1,4 +1,4 @@
-name: PR558 Demon Souls Diagnostic Windows Build
+name: PR558 Demon Souls FPS Optimization Windows Build
 
 on:
   push:
@@ -41,163 +41,15 @@ jobs:
           $text = $text.Replace($oldDelete, $newDelete)
           Set-Content -Path $path -Value $text -NoNewline
 
-      - name: Add shader and pipeline performance logging
+      - name: Batch Demon Souls GPU readbacks into 8 MiB windows
         shell: pwsh
         run: |
-          $path = "src/graphics/host_gpu/renderer/pipeline/pipelineCache.cpp"
+          $path = "src/graphics/host_gpu/renderer/cache/bufferCache.cpp"
           $text = Get-Content $path -Raw
-
-          $old = '#include <atomic>'
-          $new = "#include <atomic>`n#include <chrono>"
-          if (-not $text.Contains($old)) { throw "atomic include not found" }
+          $old = "constexpr uint64_t WindowSize   = 512 * 1024;"
+          $new = "constexpr uint64_t WindowSize   = 8 * 1024 * 1024;"
+          if (-not $text.Contains($old)) { throw "buffer readback window not found" }
           $text = $text.Replace($old, $new)
-
-          $old = @'
-          		auto translated = ShaderRecompiler::TranslateProgram(params.code, options);
-          '@
-          $new = @'
-          		static uint64_t perf_shader_hits = 0;
-          		static uint64_t perf_shader_new = 0;
-          		static double perf_shader_total_ms = 0.0;
-          		static double perf_shader_max_ms = 0.0;
-          		const auto perf_shader_begin = std::chrono::steady_clock::now();
-          		auto translated = ShaderRecompiler::TranslateProgram(params.code, options);
-          '@
-          if (-not $text.Contains($old)) { throw "shader translate block not found" }
-          $text = $text.Replace($old, $new)
-
-          $old = @'
-          				permutation->program.bindings.AdvancePushData(push_data_cursor);
-          				return permutation->handle;
-          '@
-          $new = @'
-          				permutation->program.bindings.AdvancePushData(push_data_cursor);
-          				++perf_shader_hits;
-          				return permutation->handle;
-          '@
-          if (-not $text.Contains($old)) { throw "shader cache hit block not found" }
-          $text = $text.Replace($old, $new)
-
-          $old = @'
-          		entry->second.permutations.push_back(CompilePermutation(
-          		    params, options, std::move(translated), std::move(specialization), push_data_cursor));
-          		const auto& permutation = entry->second.permutations.back();
-          '@
-          $new = @'
-          		entry->second.permutations.push_back(CompilePermutation(
-          		    params, options, std::move(translated), std::move(specialization), push_data_cursor));
-          		const auto perf_shader_end = std::chrono::steady_clock::now();
-          		const double perf_shader_ms = std::chrono::duration<double, std::milli>(
-          		    perf_shader_end - perf_shader_begin).count();
-          		++perf_shader_new;
-          		perf_shader_total_ms += perf_shader_ms;
-          		perf_shader_max_ms = std::max(perf_shader_max_ms, perf_shader_ms);
-          		if ((perf_shader_new & 15u) == 0 || perf_shader_ms >= 50.0) {
-          			std::printf("[PERF] shader_new stage=%s new=%llu hits=%llu last_ms=%.3f avg_ms=%.3f max_ms=%.3f total_ms=%.3f\n",
-          			            label, static_cast<unsigned long long>(perf_shader_new),
-          			            static_cast<unsigned long long>(perf_shader_hits), perf_shader_ms,
-          			            perf_shader_total_ms / static_cast<double>(perf_shader_new),
-          			            perf_shader_max_ms, perf_shader_total_ms);
-          		}
-          		const auto& permutation = entry->second.permutations.back();
-          '@
-          if (-not $text.Contains($old)) { throw "shader compile block not found" }
-          $text = $text.Replace($old, $new)
-
-          $old = @'
-          	if (auto iter = m_graphics_pipelines.find(key); iter != m_graphics_pipelines.end()) {
-          		return *iter->second;
-          	}
-          '@
-          $new = @'
-          	static uint64_t perf_gfx_hits = 0;
-          	static uint64_t perf_gfx_new = 0;
-          	static double perf_gfx_total_ms = 0.0;
-          	static double perf_gfx_max_ms = 0.0;
-          	if (auto iter = m_graphics_pipelines.find(key); iter != m_graphics_pipelines.end()) {
-          		++perf_gfx_hits;
-          		return *iter->second;
-          	}
-          '@
-          if (-not $text.Contains($old)) { throw "graphics pipeline hit block not found" }
-          $text = $text.Replace($old, $new)
-
-          $old = @'
-          	auto cached = std::make_unique<Pipeline>();
-          	LogPipelineTrace("CreatePipelineInternal begin", vs_id, ps_id);
-          	CreatePipelineInternal(m_graphics, *cached, rendering, key.vertex_input, vs_input_info,
-          	                       vertex_program, ps_input_info, pixel_program, static_params,
-          	                       m_driver_cache);
-          	LogPipelineTrace("CreatePipelineInternal done", vs_id, ps_id);
-          '@
-          $new = @'
-          	auto cached = std::make_unique<Pipeline>();
-          	const auto perf_gfx_begin = std::chrono::steady_clock::now();
-          	LogPipelineTrace("CreatePipelineInternal begin", vs_id, ps_id);
-          	CreatePipelineInternal(m_graphics, *cached, rendering, key.vertex_input, vs_input_info,
-          	                       vertex_program, ps_input_info, pixel_program, static_params,
-          	                       m_driver_cache);
-          	LogPipelineTrace("CreatePipelineInternal done", vs_id, ps_id);
-          	const double perf_gfx_ms = std::chrono::duration<double, std::milli>(
-          	    std::chrono::steady_clock::now() - perf_gfx_begin).count();
-          	++perf_gfx_new;
-          	perf_gfx_total_ms += perf_gfx_ms;
-          	perf_gfx_max_ms = std::max(perf_gfx_max_ms, perf_gfx_ms);
-          	if ((perf_gfx_new & 15u) == 0 || perf_gfx_ms >= 25.0) {
-          		std::printf("[PERF] gfx_pipeline new=%llu hits=%llu last_ms=%.3f avg_ms=%.3f max_ms=%.3f total_ms=%.3f\n",
-          		            static_cast<unsigned long long>(perf_gfx_new),
-          		            static_cast<unsigned long long>(perf_gfx_hits), perf_gfx_ms,
-          		            perf_gfx_total_ms / static_cast<double>(perf_gfx_new),
-          		            perf_gfx_max_ms, perf_gfx_total_ms);
-          	}
-          '@
-          if (-not $text.Contains($old)) { throw "graphics pipeline create block not found" }
-          $text = $text.Replace($old, $new)
-
-          $old = @'
-          	if (auto iter = m_compute_pipelines.find(compute_program.id);
-          	    iter != m_compute_pipelines.end()) {
-          		return *iter->second;
-          	}
-          '@
-          $new = @'
-          	static uint64_t perf_compute_hits = 0;
-          	static uint64_t perf_compute_new = 0;
-          	static double perf_compute_total_ms = 0.0;
-          	static double perf_compute_max_ms = 0.0;
-          	if (auto iter = m_compute_pipelines.find(compute_program.id);
-          	    iter != m_compute_pipelines.end()) {
-          		++perf_compute_hits;
-          		return *iter->second;
-          	}
-          '@
-          if (-not $text.Contains($old)) { throw "compute pipeline hit block not found" }
-          $text = $text.Replace($old, $new)
-
-          $old = @'
-          	auto cached = std::make_unique<Pipeline>();
-          	CreatePipelineInternal(m_graphics, *cached, input_info, compute_program.module, m_driver_cache);
-          '@
-          $new = @'
-          	auto cached = std::make_unique<Pipeline>();
-          	const auto perf_compute_begin = std::chrono::steady_clock::now();
-          	CreatePipelineInternal(m_graphics, *cached, input_info, compute_program.module, m_driver_cache);
-          	const double perf_compute_ms = std::chrono::duration<double, std::milli>(
-          	    std::chrono::steady_clock::now() - perf_compute_begin).count();
-          	++perf_compute_new;
-          	perf_compute_total_ms += perf_compute_ms;
-          	perf_compute_max_ms = std::max(perf_compute_max_ms, perf_compute_ms);
-          	if ((perf_compute_new & 15u) == 0 || perf_compute_ms >= 25.0) {
-          		std::printf("[PERF] compute_pipeline new=%llu hits=%llu last_ms=%.3f avg_ms=%.3f max_ms=%.3f total_ms=%.3f\n",
-          		            static_cast<unsigned long long>(perf_compute_new),
-          		            static_cast<unsigned long long>(perf_compute_hits), perf_compute_ms,
-          		            perf_compute_total_ms / static_cast<double>(perf_compute_new),
-          		            perf_compute_max_ms, perf_compute_total_ms);
-          	}
-          '@
-          if (-not $text.Contains($old)) { throw "compute pipeline create block not found" }
-          $text = $text.Replace($old, $new)
-
           Set-Content -Path $path -Value $text -NoNewline
 
       - name: Setup Visual Studio environment
@@ -240,7 +92,7 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
 
-      - name: Configure
+      - name: Configure Release LTO build
         shell: cmd
         run: |
           cmake -S . -B _Build/windows ^
@@ -249,7 +101,7 @@ jobs:
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON ^
             -DKYTY_BUILD_ORIGIN=Fork ^
             -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 ^
-            -DKYTY_RELEASE_TAG=KytyPS5-PR558-DS-perf-shader-pipeline ^
+            -DKYTY_RELEASE_TAG=KytyPS5-PR558-DS-readback8m ^
             -DCMAKE_C_COMPILER=clang-cl ^
             -DCMAKE_CXX_COMPILER=clang-cl ^
             -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
@@ -265,6 +117,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-PR558-DS-Perf-ShaderPipeline
+          name: KytyPS5-Windows-x64-PR558-DS-Readback8MiB
           path: _Build/windows/install/**
           if-no-files-found: error
