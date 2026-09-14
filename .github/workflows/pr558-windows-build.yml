@@ -31,7 +31,19 @@ jobs:
         run: |
           $path = "src/graphics/host_gpu/renderer/image/image.cpp"
           $text = Get-Content $path -Raw
-          $pattern = '(?s)\tif \(!graphics\.CreateImage\(create, backing\)\) \{.*?\r?\n\t\}'
+          $startNeedle = 'if (!graphics.CreateImage(create, backing)) {'
+          $start = $text.IndexOf($startNeedle)
+          if ($start -lt 0) { throw "Image creation block start not found" }
+          $lineStart = $text.LastIndexOf("`n", $start)
+          if ($lineStart -lt 0) { $lineStart = 0 } else { $lineStart++ }
+          $endNeedle = "`n`t}`n"
+          $end = $text.IndexOf($endNeedle, $start)
+          if ($end -lt 0) {
+            $endNeedle = "`r`n`t}`r`n"
+            $end = $text.IndexOf($endNeedle, $start)
+          }
+          if ($end -lt 0) { throw "Image creation block end not found" }
+          $end += $endNeedle.Length
           $new = @'
 	if (!graphics.CreateImage(create, backing)) {
 		EXIT("failed to create image:\n"
@@ -57,8 +69,7 @@ jobs:
 		     static_cast<uint32_t>(info.metadata.compression), info.metadata.stencil_compressed ? 1u : 0u);
 	}
 '@
-          $updated = [regex]::Replace($text, $pattern, $new, 1)
-          if ($updated -eq $text) { throw "Image failure block not found" }
+          $updated = $text.Substring(0, $lineStart) + $new + $text.Substring($end)
           Set-Content -Path $path -Value $updated -NoNewline
 
       - name: Setup Visual Studio environment
