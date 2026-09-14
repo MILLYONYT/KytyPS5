@@ -26,6 +26,21 @@ jobs:
           $text = $text.Replace("current = std::min(region_end, end);", "current = (region_end < end ? region_end : end);")
           Set-Content -Path $path -Value $text -NoNewline
 
+      - name: Make texture GC aggressive under VRAM pressure
+        shell: pwsh
+        run: |
+          $path = "src/graphics/host_gpu/renderer/cache/textureCache.cpp"
+          $text = Get-Content $path -Raw
+          $oldAge = "const uint64_t age       = std::min<uint64_t>(aggressive ? 160 : pressured ? 80 : 16, tick);"
+          $newAge = "const uint64_t age       = std::min<uint64_t>(aggressive ? 4 : pressured ? 8 : 16, tick);"
+          $oldDelete = "size_t         deletions = aggressive ? 40 : pressured ? 20 : 10;"
+          $newDelete = "size_t         deletions = aggressive ? 160 : pressured ? 80 : 20;"
+          if (-not $text.Contains($oldAge)) { throw "texture GC age block not found" }
+          if (-not $text.Contains($oldDelete)) { throw "texture GC deletion block not found" }
+          $text = $text.Replace($oldAge, $newAge)
+          $text = $text.Replace($oldDelete, $newDelete)
+          Set-Content -Path $path -Value $text -NoNewline
+
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
 
@@ -75,7 +90,7 @@ jobs:
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON ^
             -DKYTY_BUILD_ORIGIN=Fork ^
             -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 ^
-            -DKYTY_RELEASE_TAG=KytyPS5-PR558-DS-vma-diagnostics ^
+            -DKYTY_RELEASE_TAG=KytyPS5-PR558-DS-vram-gc ^
             -DCMAKE_C_COMPILER=clang-cl ^
             -DCMAKE_CXX_COMPILER=clang-cl ^
             -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
@@ -91,6 +106,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-PR558-DS-VMA-Diagnostics
+          name: KytyPS5-Windows-x64-PR558-DS-VRAM-GC
           path: _Build/windows/install/**
           if-no-files-found: error
