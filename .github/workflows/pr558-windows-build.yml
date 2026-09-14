@@ -1,4 +1,4 @@
-name: PR558 + GlamourDev Demon Souls Hybrid Windows Build
+name: PR558 Demon Souls Diagnostic Windows Build
 
 on:
   push:
@@ -11,23 +11,12 @@ jobs:
   windows:
     runs-on: windows-2022
     steps:
-      - name: Checkout PR558 Demon Souls branch
+      - name: Checkout PR558 Demon Souls diagnostic branch
         uses: actions/checkout@v4
         with:
           ref: demons-souls-pr558-test
           submodules: recursive
           fetch-depth: 0
-
-      - name: Apply GlamourDev shader fixes
-        shell: pwsh
-        run: |
-          git config user.name "Milly Kyty test builder"
-          git config user.email "actions@users.noreply.github.com"
-          git fetch --no-tags https://github.com/GlamourDev/KytyPS5.git main:refs/remotes/glamour/main
-          git cherry-pick e04007a7c67f1057e076552f3e6797235901296f
-          git cherry-pick 32ea0869e59eaedf08a9c94ae8cad973fa4a4a36
-          git cherry-pick 1af19eabf070ea74337bd1689b1081c2db1c296f
-          git log -4 --oneline
 
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -78,7 +67,7 @@ jobs:
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON ^
             -DKYTY_BUILD_ORIGIN=Fork ^
             -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 ^
-            -DKYTY_RELEASE_TAG=KytyPS5-PR558-GlamourDev-DS-hybrid ^
+            -DKYTY_RELEASE_TAG=KytyPS5-PR558-DS-diagnostics ^
             -DCMAKE_C_COMPILER=clang-cl ^
             -DCMAKE_CXX_COMPILER=clang-cl ^
             -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
@@ -94,6 +83,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-PR558-GlamourDev-Hybrid
+          name: KytyPS5-Windows-x64-PR558-DS-Diagnostics
           path: _Build/windows/install/**
           if-no-files-found: error
