@@ -29,48 +29,8 @@ jobs:
       - name: Add image creation failure diagnostics
         shell: pwsh
         run: |
-          $path = "src/graphics/host_gpu/renderer/image/image.cpp"
-          $text = Get-Content $path -Raw
-          $startNeedle = 'if (!graphics.CreateImage(create, backing)) {'
-          $start = $text.IndexOf($startNeedle)
-          if ($start -lt 0) { throw "Image creation block start not found" }
-          $lineStart = $text.LastIndexOf("`n", $start)
-          if ($lineStart -lt 0) { $lineStart = 0 } else { $lineStart++ }
-          $endNeedle = "`n`t}`n"
-          $end = $text.IndexOf($endNeedle, $start)
-          if ($end -lt 0) {
-            $endNeedle = "`r`n`t}`r`n"
-            $end = $text.IndexOf($endNeedle, $start)
-          }
-          if ($end -lt 0) { throw "Image creation block end not found" }
-          $end += $endNeedle.Length
-          $new = @'
-	if (!graphics.CreateImage(create, backing)) {
-		EXIT("failed to create image:\n"
-		     " create: extent=%ux%ux%u format=%d type=%d layers=%u levels=%u usage=0x%x flags=0x%x samples=0x%x\n"
-		     " limits: maxExtent=%ux%ux%u maxMipLevels=%u maxArrayLayers=%u sampleCounts=0x%x maxResourceSize=0x%016llx\n"
-		     " guest: format=%u type=%u pitch=%u bytesPerBlock=%u samples=%u tileMode=%u data=0x%016llx+0x%016llx stencil=0x%016llx+0x%016llx\n"
-		     " metadata: kind=%u range=0x%016llx+0x%016llx control=0x%08x compression=%u stencilCompressed=%u\n",
-		     create.extent.width, create.extent.height, create.extent.depth,
-		     static_cast<int>(create.format), static_cast<int>(create.imageType), create.arrayLayers,
-		     create.mipLevels, static_cast<vk::ImageUsageFlags::MaskType>(create.usage),
-		     static_cast<vk::ImageCreateFlags::MaskType>(create.flags),
-		     static_cast<vk::SampleCountFlags::MaskType>(create.samples), properties.maxExtent.width,
-		     properties.maxExtent.height, properties.maxExtent.depth, properties.maxMipLevels,
-		     properties.maxArrayLayers, static_cast<vk::SampleCountFlags::MaskType>(properties.sampleCounts),
-		     static_cast<unsigned long long>(properties.maxResourceSize),
-		     static_cast<uint32_t>(info.guest_format), static_cast<uint32_t>(info.type), info.pitch,
-		     info.bytes_per_block, info.samples, static_cast<uint32_t>(info.tile_mode),
-		     static_cast<unsigned long long>(info.data.address), static_cast<unsigned long long>(info.data.size),
-		     static_cast<unsigned long long>(info.stencil.address), static_cast<unsigned long long>(info.stencil.size),
-		     static_cast<uint32_t>(info.metadata.kind),
-		     static_cast<unsigned long long>(info.metadata.range.address),
-		     static_cast<unsigned long long>(info.metadata.range.size), info.metadata.control,
-		     static_cast<uint32_t>(info.metadata.compression), info.metadata.stencil_compressed ? 1u : 0u);
-	}
-'@
-          $updated = $text.Substring(0, $lineStart) + $new + $text.Substring($end)
-          Set-Content -Path $path -Value $updated -NoNewline
+          $code = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnA9UGF0aCgic3JjL2dyYXBoaWNzL2hvc3RfZ3B1L3JlbmRlcmVyL2ltYWdlL2ltYWdlLmNwcCIpCnM9cC5yZWFkX3RleHQoZW5jb2Rpbmc9InV0Zi04IikKbmVlZGxlPSJcdGlmICghZ3JhcGhpY3MuQ3JlYXRlSW1hZ2UoY3JlYXRlLCBiYWNraW5nKSkgeyIKc3RhcnQ9cy5maW5kKG5lZWRsZSkKYXNzZXJ0IHN0YXJ0Pj0wLCAiaW1hZ2UgY3JlYXRlIGJsb2NrIHN0YXJ0IG5vdCBmb3VuZCIKZW5kPXMuZmluZCgiXG5cdH1cbiIsIHN0YXJ0KQphc3NlcnQgZW5kPj0wLCAiaW1hZ2UgY3JlYXRlIGJsb2NrIGVuZCBub3QgZm91bmQiCmVuZCs9bGVuKCJcblx0fVxuIikKbmV3PScnJ1x0aWYgKCFncmFwaGljcy5DcmVhdGVJbWFnZShjcmVhdGUsIGJhY2tpbmcpKSB7Clx0XHRFWElUKCJmYWlsZWQgdG8gY3JlYXRlIGltYWdlOlxcbiIKXHRcdCAgICAgIiBjcmVhdGU6IGV4dGVudD0ldXgldXgldSBmb3JtYXQ9JWQgdHlwZT0lZCBsYXllcnM9JXUgbGV2ZWxzPSV1IHVzYWdlPTB4JXggZmxhZ3M9MHgleCBzYW1wbGVzPTB4JXhcXG4iClx0XHQgICAgICIgbGltaXRzOiBtYXhFeHRlbnQ9JXV4JXV4JXUgbWF4TWlwTGV2ZWxzPSV1IG1heEFycmF5TGF5ZXJzPSV1IHNhbXBsZUNvdW50cz0weCV4IG1heFJlc291cmNlU2l6ZT0weCUwMTZsbHhcXG4iClx0XHQgICAgICIgZ3Vlc3Q6IGZvcm1hdD0ldSB0eXBlPSV1IHBpdGNoPSV1IGJ5dGVzUGVyQmxvY2s9JXUgc2FtcGxlcz0ldSB0aWxlTW9kZT0ldSBkYXRhPTB4JTAxNmxseCsweCUwMTZsbHhcXG4iLApcdFx0ICAgICBjcmVhdGUuZXh0ZW50LndpZHRoLCBjcmVhdGUuZXh0ZW50LmhlaWdodCwgY3JlYXRlLmV4dGVudC5kZXB0aCwKXHRcdCAgICAgc3RhdGljX2Nhc3Q8aW50PihjcmVhdGUuZm9ybWF0KSwgc3RhdGljX2Nhc3Q8aW50PihjcmVhdGUuaW1hZ2VUeXBlKSwgY3JlYXRlLmFycmF5TGF5ZXJzLApcdFx0ICAgICBjcmVhdGUubWlwTGV2ZWxzLCBzdGF0aWNfY2FzdDx2azo6SW1hZ2VVc2FnZUZsYWdzOjpNYXNrVHlwZT4oY3JlYXRlLnVzYWdlKSwKXHRcdCAgICAgc3RhdGljX2Nhc3Q8dms6OkltYWdlQ3JlYXRlRmxhZ3M6Ok1hc2tUeXBlPihjcmVhdGUuZmxhZ3MpLApcdFx0ICAgICBzdGF0aWNfY2FzdDx2azo6U2FtcGxlQ291bnRGbGFnczo6TWFza1R5cGU+KGNyZWF0ZS5zYW1wbGVzKSwKXHRcdCAgICAgcHJvcGVydGllcy5tYXhFeHRlbnQud2lkdGgsIHByb3BlcnRpZXMubWF4RXh0ZW50LmhlaWdodCwgcHJvcGVydGllcy5tYXhFeHRlbnQuZGVwdGgsClx0XHQgICAgIHByb3BlcnRpZXMubWF4TWlwTGV2ZWxzLCBwcm9wZXJ0aWVzLm1heEFycmF5TGF5ZXJzLApcdFx0ICAgICBzdGF0aWNfY2FzdDx2azo6U2FtcGxlQ291bnRGbGFnczo6TWFza1R5cGU+KHByb3BlcnRpZXMuc2FtcGxlQ291bnRzKSwKXHRcdCAgICAgc3RhdGljX2Nhc3Q8dW5zaWduZWQgbG9uZyBsb25nPihwcm9wZXJ0aWVzLm1heFJlc291cmNlU2l6ZSksClx0XHQgICAgIHN0YXRpY19jYXN0PHVpbnQzMl90PihpbmZvLmd1ZXN0X2Zvcm1hdCksIHN0YXRpY19jYXN0PHVpbnQzMl90PihpbmZvLnR5cGUpLCBpbmZvLnBpdGNoLApcdFx0ICAgICBpbmZvLmJ5dGVzX3Blcl9ibG9jaywgaW5mby5zYW1wbGVzLCBzdGF0aWNfY2FzdDx1aW50MzJfdD4oaW5mby50aWxlX21vZGUpLApcdFx0ICAgICBzdGF0aWNfY2FzdDx1bnNpZ25lZCBsb25nIGxvbmc+KGluZm8uZGF0YS5hZGRyZXNzKSwKXHRcdCAgICAgc3RhdGljX2Nhc3Q8dW5zaWduZWQgbG9uZyBsb25nPihpbmZvLmRhdGEuc2l6ZSkpOwpcdH0KJycnCnAud3JpdGVfdGV4dChzWzpzdGFydF0rbmV3K3NbZW5kOl0sIGVuY29kaW5nPSJ1dGYtOCIpCnByaW50KCJpbWFnZSBkaWFnbm9zdGljcyBpbmplY3RlZCIpCg=="))
+          python -c $code
 
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
