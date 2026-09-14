@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+#include <algorithm>
 #include <windows.h> // IWYU pragma: keep
 #else
 #include <algorithm>
@@ -82,6 +83,104 @@ bool InitializeThreadSignalStack() {
 
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 
+static bool IsReadableWindowsRange(uint64_t addr, uint64_t size) noexcept {
+	if (addr == 0 || size == 0 || addr + size < addr) {
+		return false;
+	}
+	const uint64_t end = addr + size;
+	for (uint64_t current = addr; current < end;) {
+		MEMORY_BASIC_INFORMATION mbi {};
+		if (VirtualQuery(reinterpret_cast<const void*>(current), &mbi, sizeof(mbi)) == 0 ||
+		    mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0) {
+			return false;
+		}
+		const auto region_end = reinterpret_cast<uint64_t>(mbi.BaseAddress) + mbi.RegionSize;
+		if (region_end <= current) {
+			return false;
+		}
+		current = std::min(region_end, end);
+	}
+	return true;
+}
+
+static void DumpLowAddressGuestFault(const ExceptionInfo& info) noexcept {
+	constexpr uint64_t MAIN_GUEST_BASE = 0x0000000900000000ull;
+	constexpr uint64_t GUEST_CODE_END  = 0x0000001000000000ull;
+
+	if (info.type != ExceptionType::AccessViolation || info.access_violation_vaddr >= 0x1000 ||
+	    info.exception_address < MAIN_GUEST_BASE || info.exception_address >= GUEST_CODE_END) {
+		return;
+	}
+
+	std::printf("--- Extended low-address guest fault diagnostics ---\n");
+	std::printf("guest_pc=0x%016llx main_image_offset=0x%llx fault_addr=0x%016llx\n",
+	            static_cast<unsigned long long>(info.exception_address),
+	            static_cast<unsigned long long>(info.exception_address - MAIN_GUEST_BASE),
+	            static_cast<unsigned long long>(info.access_violation_vaddr));
+
+	constexpr uint64_t code_before = 256;
+	constexpr uint64_t code_after  = 64;
+	if (info.exception_address >= code_before &&
+	    IsReadableWindowsRange(info.exception_address - code_before, code_before + code_after)) {
+		const auto* code = reinterpret_cast<const uint8_t*>(info.exception_address - code_before);
+		std::printf("extended_code (pc-256 .. pc+64, fault at byte 256):");
+		for (uint64_t i = 0; i < code_before + code_after; ++i) {
+			std::printf("%s%02x", (i % 16 == 0) ? "\n " : " ", code[i]);
+		}
+		std::printf("\n");
+	}
+
+	constexpr uint64_t stack_before = 128;
+	constexpr uint64_t stack_after  = 640;
+	if (info.rsp >= stack_before &&
+	    IsReadableWindowsRange(info.rsp - stack_before, stack_before + stack_after)) {
+		const auto stack_start = info.rsp - stack_before;
+		const auto* stack       = reinterpret_cast<const uint64_t*>(stack_start);
+		constexpr uint64_t qwords = (stack_before + stack_after) / sizeof(uint64_t);
+		std::printf("extended_stack (rsp-128 .. rsp+640; rsp is qword 16):");
+		for (uint64_t i = 0; i < qwords; ++i) {
+			std::printf("%s %016llx", (i % 4 == 0) ? "\n " : "",
+			            static_cast<unsigned long long>(stack[i]));
+		}
+		std::printf("\n");
+
+		std::printf("guest-code-looking stack values:");
+		for (uint64_t i = 0; i < qwords; ++i) {
+			const uint64_t value = stack[i];
+			if (value >= MAIN_GUEST_BASE && value < GUEST_CODE_END) {
+				const int64_t rel_qword = static_cast<int64_t>(i) - 16;
+				std::printf("\n [%+lld qwords] 0x%016llx main+0x%llx", static_cast<long long>(rel_qword),
+				            static_cast<unsigned long long>(value),
+				            static_cast<unsigned long long>(value - MAIN_GUEST_BASE));
+			}
+		}
+		std::printf("\n");
+	}
+
+	struct NamedReg {
+		const char* name;
+		uint64_t    value;
+	};
+	const NamedReg regs[] = {{"rax", info.rax}, {"rbx", info.rbx}, {"rcx", info.rcx},
+	                         {"rdx", info.rdx}, {"rsi", info.rsi}, {"rdi", info.rdi},
+	                         {"rbp", info.rbp}, {"r8", info.r8},   {"r9", info.r9},
+	                         {"r10", info.r10}, {"r11", info.r11}, {"r12", info.r12},
+	                         {"r13", info.r13}, {"r14", info.r14}, {"r15", info.r15}};
+	for (const auto& reg: regs) {
+		if (reg.value < 0x10000 || !IsReadableWindowsRange(reg.value, 16 * sizeof(uint64_t))) {
+			continue;
+		}
+		const auto* words = reinterpret_cast<const uint64_t*>(reg.value);
+		std::printf("mem[%s=0x%016llx]:", reg.name, static_cast<unsigned long long>(reg.value));
+		for (int i = 0; i < 16; ++i) {
+			std::printf("%s %016llx", (i % 4 == 0) ? "\n " : "",
+			            static_cast<unsigned long long>(words[i]));
+		}
+		std::printf("\n");
+	}
+	std::fflush(stdout);
+}
+
 static LONG WINAPI ExceptionFilter(PEXCEPTION_POINTERS exception) noexcept {
 	auto* exception_record = exception->ExceptionRecord;
 
@@ -131,6 +230,8 @@ static LONG WINAPI ExceptionFilter(PEXCEPTION_POINTERS exception) noexcept {
 	info.r13 = exception->ContextRecord->R13;
 	info.r14 = exception->ContextRecord->R14;
 	info.r15 = exception->ContextRecord->R15;
+
+	DumpLowAddressGuestFault(info);
 
 	const auto handler = g_handler.load(std::memory_order_acquire);
 	if (handler != nullptr && handler(info)) {
