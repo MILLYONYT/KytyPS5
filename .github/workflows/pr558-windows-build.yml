@@ -104,6 +104,21 @@ jobs:
           $text = $text.Replace($old, $new)
           Set-Content -Path $path -Value $text -NoNewline
 
+          $path = "src/graphics/shader/rectListShader.cpp"
+          $text = Get-Content $path -Raw
+          $replacements = @(
+            @("return builder.Type(opcode, {operands...});", "return builder.Type(opcode, {static_cast<uint32_t>(operands)...});"),
+            @("builder.AddFunction({opcode, type, id, operands...});", "builder.AddFunction({static_cast<uint32_t>(opcode), type, id, static_cast<uint32_t>(operands)...});"),
+            @("builder.AddFunction({opcode, id, operands...});", "builder.AddFunction({static_cast<uint32_t>(opcode), id, static_cast<uint32_t>(operands)...});"),
+            @("builder.AddFunction({opcode, operands...});", "builder.AddFunction({static_cast<uint32_t>(opcode), static_cast<uint32_t>(operands)...});"),
+            @("builder.AddAnnotation({spv::OpDecorate, target, decoration, value});", "builder.AddAnnotation({spv::OpDecorate, target, static_cast<uint32_t>(decoration), value});")
+          )
+          foreach ($r in $replacements) {
+            if (-not $text.Contains($r[0])) { throw "rectListShader narrowing pattern not found: $($r[0])" }
+            $text = $text.Replace($r[0], $r[1])
+          }
+          Set-Content -Path $path -Value $text -NoNewline
+
           $patches = @(
             @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterMemoryHelpers.cpp", "max_value ? spv::OpUGreaterThan : spv::OpULessThan", "static_cast<uint32_t>(max_value ? spv::OpUGreaterThan : spv::OpULessThan)"),
             @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterMesh.cpp", "output.kind == IR::StageOutputKind::Layer ? spv::BuiltInLayer", "static_cast<uint32_t>(output.kind == IR::StageOutputKind::Layer ? spv::BuiltInLayer"),
