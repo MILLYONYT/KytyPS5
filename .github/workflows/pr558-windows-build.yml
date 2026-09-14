@@ -1,4 +1,4 @@
-name: PR558 Demon Souls FPS Optimization Windows Build
+name: PR500 Demon Souls Performance Windows Build
 
 on:
   push:
@@ -11,20 +11,13 @@ jobs:
   windows:
     runs-on: windows-2022
     steps:
-      - name: Checkout PR558 Demon Souls diagnostic branch
+      - name: Checkout Demon Souls PR500 source
         uses: actions/checkout@v4
         with:
-          ref: demons-souls-pr558-test
+          repository: TarkusR/KytyPS5
+          ref: 5616e9716151784260d795202a8a8e285e1b00b2
           submodules: recursive
           fetch-depth: 0
-
-      - name: Fix Windows min macro collision in diagnostics
-        shell: pwsh
-        run: |
-          $path = "src/common/hostException.cpp"
-          $text = Get-Content $path -Raw
-          $text = $text.Replace("current = std::min(region_end, end);", "current = (region_end < end ? region_end : end);")
-          Set-Content -Path $path -Value $text -NoNewline
 
       - name: Balance texture GC under VRAM pressure
         shell: pwsh
@@ -41,45 +34,19 @@ jobs:
           $text = $text.Replace($oldDelete, $newDelete)
           Set-Content -Path $path -Value $text -NoNewline
 
-      - name: Deduplicate BDA preparation within a scheduler tick
+      - name: Increase BufferCache download staging to 256 MiB
         shell: pwsh
         run: |
-          $path = "src/graphics/host_gpu/renderer/renderContext.cpp"
+          $path = "src/graphics/host_gpu/renderer/cache/bufferCache.cpp"
           $text = Get-Content $path -Raw
-          $old = @'
-          void RenderContext::PrepareBda() {
-          	std::shared_lock lock(m_mapped_ranges_mutex);
-          	m_mapped_ranges.ForEach([this](uint64_t start, uint64_t end) {
-          		m_buffer_cache.SynchronizeBuffersInRange(start, end - start);
-          	});
-          	m_fault_process_pending = true;
-          }
-          '@
-          $new = @'
-          void RenderContext::PrepareBda() {
-          	// DMA-using draws can request BDA preparation repeatedly before the current
-          	// command buffer is submitted. The first pass already walks every mapped range
-          	// and schedules the required buffer synchronization, so repeating that full
-          	// CPU-side scan in the same scheduler tick is redundant while fault processing
-          	// is still pending.
-          	static thread_local const RenderContext* last_context = nullptr;
-          	static thread_local uint64_t             last_tick    = ~uint64_t {0};
-          	const auto tick = m_command_scheduler.CurrentTick();
-          	if (last_context == this && last_tick == tick && m_fault_process_pending) {
-          		return;
-          	}
-          	last_context = this;
-          	last_tick    = tick;
-
-          	std::shared_lock lock(m_mapped_ranges_mutex);
-          	m_mapped_ranges.ForEach([this](uint64_t start, uint64_t end) {
-          		m_buffer_cache.SynchronizeBuffersInRange(start, end - start);
-          	});
-          	m_fault_process_pending = true;
-          }
-          '@
-          if (-not $text.Contains($old)) { throw "PrepareBda block not found" }
-          $text = $text.Replace($old, $new)
+          $oldBuffer = "m_download_buffer(graphics, scheduler, MemoryUsage::Download, 32 * MiB),"
+          $newBuffer = "m_download_buffer(graphics, scheduler, MemoryUsage::Download, 256 * MiB),"
+          $oldError = "BufferCache: download exceeds 32 MiB staging buffer capacity"
+          $newError = "BufferCache: download exceeds 256 MiB staging buffer capacity"
+          if (-not $text.Contains($oldBuffer)) { throw "32 MiB download buffer definition not found" }
+          if (-not $text.Contains($oldError)) { throw "32 MiB download capacity text not found" }
+          $text = $text.Replace($oldBuffer, $newBuffer)
+          $text = $text.Replace($oldError, $newError)
           Set-Content -Path $path -Value $text -NoNewline
 
       - name: Setup Visual Studio environment
@@ -131,7 +98,7 @@ jobs:
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON ^
             -DKYTY_BUILD_ORIGIN=Fork ^
             -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 ^
-            -DKYTY_RELEASE_TAG=KytyPS5-PR558-DS-bda-dedupe ^
+            -DKYTY_RELEASE_TAG=KytyPS5-PR500-DS-256MiB-LTO ^
             -DCMAKE_C_COMPILER=clang-cl ^
             -DCMAKE_CXX_COMPILER=clang-cl ^
             -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
@@ -147,6 +114,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-PR558-DS-BDA-Dedupe
+          name: KytyPS5-Windows-x64-PR500-DS-256MiB-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
