@@ -18,6 +18,14 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Fix Windows min macro collision in diagnostics
+        shell: pwsh
+        run: |
+          $path = "src/common/hostException.cpp"
+          $text = Get-Content $path -Raw
+          $text = $text.Replace("current = std::min(region_end, end);", "current = (region_end < end ? region_end : end);")
+          Set-Content -Path $path -Value $text -NoNewline
+
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
 
