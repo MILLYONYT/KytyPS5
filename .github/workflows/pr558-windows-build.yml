@@ -30,39 +30,11 @@ jobs:
         shell: pwsh
         run: |
           $path = "src/graphics/host_gpu/renderer/image/image.cpp"
+          $oldB64 = "CWlmICghZ3JhcGhpY3MuQ3JlYXRlSW1hZ2UoY3JlYXRlLCBiYWNraW5nKSkgewoJCUVYSVQoImZhaWxlZCB0byBjcmVhdGUgaW1hZ2U6IGV4dGVudD0ldXgldXgldSBmb3JtYXQ9JWQgbGF5ZXJzPSV1IGxldmVscz0ldVxuIiwKCQkgICAgIGNyZWF0ZS5leHRlbnQud2lkdGgsIGNyZWF0ZS5leHRlbnQuaGVpZ2h0LCBjcmVhdGUuZXh0ZW50LmRlcHRoLAoJCSAgICAgc3RhdGljX2Nhc3Q8aW50PihjcmVhdGUuZm9ybWF0KSwgY3JlYXRlLmFycmF5TGF5ZXJzLCBjcmVhdGUubWlwTGV2ZWxzKTsKCX0K"
+          $newB64 = "CWlmICghZ3JhcGhpY3MuQ3JlYXRlSW1hZ2UoY3JlYXRlLCBiYWNraW5nKSkgewoJCUVYSVQoImZhaWxlZCB0byBjcmVhdGUgaW1hZ2U6XG4iCgkJICAgICAiIGNyZWF0ZTogZXh0ZW50PSV1eCV1eCV1IGZvcm1hdD0lZCB0eXBlPSVkIGxheWVycz0ldSBsZXZlbHM9JXUgdXNhZ2U9MHgleCBmbGFncz0weCV4IHNhbXBsZXM9MHgleFxuIgoJCSAgICAgIiBsaW1pdHM6IG1heEV4dGVudD0ldXgldXgldSBtYXhNaXBMZXZlbHM9JXUgbWF4QXJyYXlMYXllcnM9JXUgc2FtcGxlQ291bnRzPTB4JXggbWF4UmVzb3VyY2VTaXplPTB4JTAxNmxseFxuIgoJCSAgICAgIiBndWVzdDogZm9ybWF0PSV1IHR5cGU9JXUgcGl0Y2g9JXUgYnl0ZXNQZXJCbG9jaz0ldSBzYW1wbGVzPSV1IHRpbGVNb2RlPSV1IGRhdGE9MHglMDE2bGx4KzB4JTAxNmxseCBzdGVuY2lsPTB4JTAxNmxseCsweCUwMTZsbHhcbiIKCQkgICAgICIgbWV0YWRhdGE6IGtpbmQ9JXUgcmFuZ2U9MHglMDE2bGx4KzB4JTAxNmxseCBjb250cm9sPTB4JTA4eCBjb21wcmVzc2lvbj0ldSBzdGVuY2lsQ29tcHJlc3NlZD0ldVxuIiwKCQkgICAgIGNyZWF0ZS5leHRlbnQud2lkdGgsIGNyZWF0ZS5leHRlbnQuaGVpZ2h0LCBjcmVhdGUuZXh0ZW50LmRlcHRoLAoJCSAgICAgc3RhdGljX2Nhc3Q8aW50PihjcmVhdGUuZm9ybWF0KSwgc3RhdGljX2Nhc3Q8aW50PihjcmVhdGUuaW1hZ2VUeXBlKSwgY3JlYXRlLmFycmF5TGF5ZXJzLAoJCSAgICAgY3JlYXRlLm1pcExldmVscywgc3RhdGljX2Nhc3Q8dms6OkltYWdlVXNhZ2VGbGFnczo6TWFza1R5cGU+KGNyZWF0ZS51c2FnZSksCgkJICAgICBzdGF0aWNfY2FzdDx2azo6SW1hZ2VDcmVhdGVGbGFnczo6TWFza1R5cGU+KGNyZWF0ZS5mbGFncyksCgkJICAgICBzdGF0aWNfY2FzdDx2azo6U2FtcGxlQ291bnRGbGFnczo6TWFza1R5cGU+KGNyZWF0ZS5zYW1wbGVzKSwgcHJvcGVydGllcy5tYXhFeHRlbnQud2lkdGgsCgkJICAgICBwcm9wZXJ0aWVzLm1heEV4dGVudC5oZWlnaHQsIHByb3BlcnRpZXMubWF4RXh0ZW50LmRlcHRoLCBwcm9wZXJ0aWVzLm1heE1pcExldmVscywKCQkgICAgIHByb3BlcnRpZXMubWF4QXJyYXlMYXllcnMsIHN0YXRpY19jYXN0PHZrOjpTYW1wbGVDb3VudEZsYWdzOjpNYXNrVHlwZT4ocHJvcGVydGllcy5zYW1wbGVDb3VudHMpLAoJCSAgICAgc3RhdGljX2Nhc3Q8dW5zaWduZWQgbG9uZyBsb25nPihwcm9wZXJ0aWVzLm1heFJlc291cmNlU2l6ZSksCgkJICAgICBzdGF0aWNfY2FzdDx1aW50MzJfdD4oaW5mby5ndWVzdF9mb3JtYXQpLCBzdGF0aWNfY2FzdDx1aW50MzJfdD4oaW5mby50eXBlKSwgaW5mby5waXRjaCwKCQkgICAgIGluZm8uYnl0ZXNfcGVyX2Jsb2NrLCBpbmZvLnNhbXBsZXMsIHN0YXRpY19jYXN0PHVpbnQzMl90PihpbmZvLnRpbGVfbW9kZSksCgkJICAgICBzdGF0aWNfY2FzdDx1bnNpZ25lZCBsb25nIGxvbmc+KGluZm8uZGF0YS5hZGRyZXNzKSwgc3RhdGljX2Nhc3Q8dW5zaWduZWQgbG9uZyBsb25nPihpbmZvLmRhdGEuc2l6ZSksCgkJICAgICBzdGF0aWNfY2FzdDx1bnNpZ25lZCBsb25nIGxvbmc+KGluZm8uc3RlbmNpbC5hZGRyZXNzKSwgc3RhdGljX2Nhc3Q8dW5zaWduZWQgbG9uZyBsb25nPihpbmZvLnN0ZW5jaWwuc2l6ZSksCgkJICAgICBzdGF0aWNfY2FzdDx1aW50MzJfdD4oaW5mby5tZXRhZGF0YS5raW5kKSwKCQkgICAgIHN0YXRpY19jYXN0PHVuc2lnbmVkIGxvbmcgbG9uZz4oaW5mby5tZXRhZGF0YS5yYW5nZS5hZGRyZXNzKSwKCQkgICAgIHN0YXRpY19jYXN0PHVuc2lnbmVkIGxvbmcgbG9uZz4oaW5mby5tZXRhZGF0YS5yYW5nZS5zaXplKSwgaW5mby5tZXRhZGF0YS5jb250cm9sLAoJCSAgICAgc3RhdGljX2Nhc3Q8dWludDMyX3Q+KGluZm8ubWV0YWRhdGEuY29tcHJlc3Npb24pLCBpbmZvLm1ldGFkYXRhLnN0ZW5jaWxfY29tcHJlc3NlZCA/IDF1IDogMHUpOwoJfQo="
           $text = Get-Content $path -Raw
-          $old = @'
-	if (!graphics.CreateImage(create, backing)) {
-		EXIT("failed to create image: extent=%ux%ux%u format=%d layers=%u levels=%u\n",
-		     create.extent.width, create.extent.height, create.extent.depth,
-		     static_cast<int>(create.format), create.arrayLayers, create.mipLevels);
-	}
-'@
-          $new = @'
-	if (!graphics.CreateImage(create, backing)) {
-		EXIT("failed to create image:\n"
-		     " create: extent=%ux%ux%u format=%d type=%d layers=%u levels=%u usage=0x%x flags=0x%x samples=0x%x\n"
-		     " limits: maxExtent=%ux%ux%u maxMipLevels=%u maxArrayLayers=%u sampleCounts=0x%x maxResourceSize=0x%016llx\n"
-		     " guest: format=%u type=%u pitch=%u bytesPerBlock=%u samples=%u tileMode=%u data=0x%016llx+0x%016llx stencil=0x%016llx+0x%016llx\n"
-		     " metadata: kind=%u range=0x%016llx+0x%016llx control=0x%08x compression=%u stencilCompressed=%u\n",
-		     create.extent.width, create.extent.height, create.extent.depth,
-		     static_cast<int>(create.format), static_cast<int>(create.imageType), create.arrayLayers,
-		     create.mipLevels, static_cast<vk::ImageUsageFlags::MaskType>(create.usage),
-		     static_cast<vk::ImageCreateFlags::MaskType>(create.flags),
-		     static_cast<vk::SampleCountFlags::MaskType>(create.samples), properties.maxExtent.width,
-		     properties.maxExtent.height, properties.maxExtent.depth, properties.maxMipLevels,
-		     properties.maxArrayLayers, static_cast<vk::SampleCountFlags::MaskType>(properties.sampleCounts),
-		     static_cast<unsigned long long>(properties.maxResourceSize),
-		     static_cast<uint32_t>(info.guest_format), static_cast<uint32_t>(info.type), info.pitch,
-		     info.bytes_per_block, info.samples, static_cast<uint32_t>(info.tile_mode),
-		     static_cast<unsigned long long>(info.data.address), static_cast<unsigned long long>(info.data.size),
-		     static_cast<unsigned long long>(info.stencil.address), static_cast<unsigned long long>(info.stencil.size),
-		     static_cast<uint32_t>(info.metadata.kind),
-		     static_cast<unsigned long long>(info.metadata.range.address),
-		     static_cast<unsigned long long>(info.metadata.range.size), info.metadata.control,
-		     static_cast<uint32_t>(info.metadata.compression), info.metadata.stencil_compressed ? 1u : 0u);
-	}
-'@
+          $old = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($oldB64))
+          $new = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($newB64))
           if (-not $text.Contains($old)) { throw "Image failure block not found" }
           $text = $text.Replace($old, $new)
           Set-Content -Path $path -Value $text -NoNewline
