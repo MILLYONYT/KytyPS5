@@ -69,7 +69,7 @@ jobs:
             -DCMAKE_C_COMPILER=clang-cl ^
             -DCMAKE_CXX_COMPILER=clang-cl ^
             -DCMAKE_C_FLAGS="/DNOMINMAX" ^
-            -DCMAKE_CXX_FLAGS="/DNOMINMAX" ^
+            -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc" ^
             -DKYTY_BUILD_ORIGIN=Fork ^
             -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 ^
             -DKYTY_RELEASE_TAG=KytyPS5-PR599-DS-LTO ^
