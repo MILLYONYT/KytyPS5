@@ -83,6 +83,27 @@ jobs:
           $text = $text.Replace($old, $new)
           Set-Content -Path $path -Value $text -NoNewline
 
+          $path = "src/graphics/shader/recompiler/backend/spirv/spirvEmitterAluHelpers.cpp"
+          $text = Get-Content $path -Raw
+          $replacements = @(
+            @("{max_value ? spv::OpUGreaterThan : spv::OpULessThan, TypeBool(state), cond, lhs, rhs}", "{static_cast<uint32_t>(max_value ? spv::OpUGreaterThan : spv::OpULessThan), TypeBool(state), cond, lhs, rhs}"),
+            @("{max_value ? spv::OpSGreaterThan : spv::OpSLessThan, TypeBool(state), cond, lhs, rhs}", "{static_cast<uint32_t>(max_value ? spv::OpSGreaterThan : spv::OpSLessThan), TypeBool(state), cond, lhs, rhs}"),
+            @("{max_value ? spv::OpFOrdGreaterThanEqual : spv::OpFOrdLessThan,", "{static_cast<uint32_t>(max_value ? spv::OpFOrdGreaterThanEqual : spv::OpFOrdLessThan),")
+          )
+          foreach ($r in $replacements) {
+            if (-not $text.Contains($r[0])) { throw "SPIR-V ALU helper narrowing pattern not found: $($r[0])" }
+            $text = $text.Replace($r[0], $r[1])
+          }
+          Set-Content -Path $path -Value $text -NoNewline
+
+          $path = "src/graphics/shader/recompiler/backend/spirv/spirvEmitterFlow.cpp"
+          $text = Get-Content $path -Raw
+          $old = "MrtOutputMode(state, exp) == 5u ? GLSLstd450UnpackUnorm2x16 : GLSLstd450UnpackHalf2x16;"
+          $new = "static_cast<uint32_t>(MrtOutputMode(state, exp) == 5u ? GLSLstd450UnpackUnorm2x16 : GLSLstd450UnpackHalf2x16);"
+          if (-not $text.Contains($old)) { throw "SPIR-V flow unpack narrowing pattern not found" }
+          $text = $text.Replace($old, $new)
+          Set-Content -Path $path -Value $text -NoNewline
+
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
 
