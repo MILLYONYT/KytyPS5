@@ -41,12 +41,30 @@ jobs:
           $text = $text.Replace($oldDelete, $newDelete)
           Set-Content -Path $path -Value $text -NoNewline
 
-      - name: Add low-overhead performance counters
+      - name: Add timeline wait performance logging
         shell: pwsh
         run: |
-          $encoded = "CmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAoKIyBJbnN0cnVtZW50IGJsb2NraW5nIFZ1bGthbiB0aW1lbGluZSBzZW1hcGhvcmUgd2FpdHMuCnAgPSBQYXRoKCJzcmMvZ3JhcGhpY3MvaG9zdF9ncHUvcmVuZGVyZXIvbWFzdGVyU2VtYXBob3JlLmNwcCIpCnMgPSBwLnJlYWRfdGV4dCgpCm9sZCA9ICIiIlx0Y29uc3QgYXV0byB3YWl0X3N0YXJ0ID0gc3RkOjpjaHJvbm86OnN0ZWFkeV9jbG9jazo6bm93KCk7Clx0Y29uc3QgYXV0byByZXN1bHQgICAgID0gbV9ncmFwaGljcy5kZXZpY2Uud2FpdFNlbWFwaG9yZXMoJndhaXRfaW5mbywgVUlOVDY0X01BWCk7Clx0aWYgKHJlc3VsdCA9PSB2azo6UmVzdWx0OjplRXJyb3JEZXZpY2VMb3N0KSB7IiIiCm5ldyA9ICIiIlx0Y29uc3QgYXV0byB3YWl0X3N0YXJ0ID0gc3RkOjpjaHJvbm86OnN0ZWFkeV9jbG9jazo6bm93KCk7Clx0Y29uc3QgYXV0byByZXN1bHQgICAgID0gbV9ncmFwaGljcy5kZXZpY2Uud2FpdFNlbWFwaG9yZXMoJndhaXRfaW5mbywgVUlOVDY0X01BWCk7Clx0Y29uc3QgYXV0byB3YWl0X2VuZCAgID0gc3RkOjpjaHJvbm86OnN0ZWFkeV9jbG9jazo6bm93KCk7Clx0Y29uc3QgYXV0byB3YWl0X3VzICAgID0gc3RhdGljX2Nhc3Q8dWludDY0X3Q+KFxuXHRcdHN0ZDo6Y2hyb25vOjpkdXJhdGlvbl9jYXN0PHN0ZDo6Y2hyb25vOjptaWNyb3NlY29uZHM+KHdhaXRfZW5kIC0gd2FpdF9zdGFydCkuY291bnQoKSk7Clx0c3RhdGljIHRocmVhZF9sb2NhbCB1aW50NjRfdCBwZXJmX3dhaXRfY291bnQgPSAwO1x0c3RhdGljIHRocmVhZF9sb2NhbCB1aW50NjRfdCBwZXJmX3dhaXRfdXMgICAgPSAwO1x0c3RhdGljIHRocmVhZF9sb2NhbCB1aW50NjRfdCBwZXJmX3dhaXRfbWF4ICAgPSAwO1x0cGVyZl93YWl0X2NvdW50Kys7XHRwZXJmX3dhaXRfdXMgKz0gd2FpdF91cztcdHBlcmZfd2FpdF9tYXggPSBzdGQ6Om1heChwZXJmX3dhaXRfbWF4LCB3YWl0X3VzKTtcdGlmICgocGVyZl93YWl0X2NvdW50ICYgMzF1KSA9PSAwKSB7XG5cdFx0TE9HRigiW1BFUkZdIHRpbWVsaW5lX3dhaXQgeDMyIHRvdGFsX21zPSUuM2YgYXZnX21zPSUuM2YgbWF4X21zPSUuM2ZcXG4iLFxuXHRcdCAgICAgc3RhdGljX2Nhc3Q8ZG91YmxlPihwZXJmX3dhaXRfdXMpIC8gMTAwMC4wLFxuXHRcdCAgICAgc3RhdGljX2Nhc3Q8ZG91YmxlPihwZXJmX3dhaXRfdXMpIC8gMzIwMDAuMCxcblx0XHQgICAgIHN0YXRpY19jYXN0PGRvdWJsZT4ocGVyZl93YWl0X21heCkgLyAxMDAwLjApO1xuXHRcdHBlcmZfd2FpdF9jb3VudCA9IDA7XG5cdFx0cGVyZl93YWl0X3VzICAgID0gMDtcblx0XHRwZXJmX3dhaXRfbWF4ICAgPSAwO1xuXHR9XG5cdGlmIChyZXN1bHQgPT0gdmtdOjpSZXN1bHQ6OmVFcnJvckRldmljZUxvc3QpIHsiIiIKaWYgb2xkIG5vdCBpbiBzOgogICAgcmFpc2UgU3lzdGVtRXhpdCgibWFzdGVyIHNlbWFwaG9yZSB3YWl0IGJsb2NrIG5vdCBmb3VuZCIpCnMgPSBzLnJlcGxhY2Uob2xkLCBuZXcsIDEpCiMgaW5jbHVkZSBhbGdvcml0aG0gZXhwbGljaXRseS4KaWYgIiNpbmNsdWRlIDxhbGdvcml0aG0+IiBub3QgaW4gczoKICAgIHMgPSBzLnJlcGxhY2UoIiNpbmNsdWRlIDxjaHJvbm8+XG4iLCAiI2luY2x1ZGUgPGFsZ29yaXRobT5cbiNpbmNsdWRlIDxjaHJvbm8+XG4iLCAxKQpwLndyaXRlX3RleHQocykKCiMgVGltZSB0aGUgcmVjdXJyaW5nIEdDL2Rvd25sb2FkIHBhdGguCnAgPSBQYXRoKCJzcmMvZ3JhcGhpY3MvaG9zdF9ncHUvcmVuZGVyZXIvcmVuZGVyQ29udGV4dC5jcHAiKQpzID0gcC5yZWFkX3RleHQoKQppZiAiI2luY2x1ZGUgPGNocm9ubz4iIG5vdCBpbiBzOgogICAgcyA9IHMucmVwbGFjZSgiI2luY2x1ZGUgPGFsZ29yaXRobT5cbiIsICIjincludeIDxhbGdvcml0aG0+XG4jaW5jbHVkZSA8Y2hyb25vPlxuIiwgMSkKb2xkID0gIiIidm9pZCBSZW5kZXJDb250ZXh0OjpSdW5HYXJiYWdlQ29sbGVjdG9yKCkge1xuXHRpZiAobV9mYXVsdF9wcm9jZXNzX3BlbmRpbmcpIHtcblx0XHRtX2ZhdWx0X3Byb2Nlc3NfcGVuZGluZyA9IGZhbHNlO1xuXHRcdG1fYnVmZmVyX2NhY2hlLlByb2Nlc3NGYXVsdEJ1ZmZlcigpO1xuXHR9XG5cdG1fdGV4dHVyZV9jYWNoZS5Qcm9jZXNzRG93bmxvYWRJbWFnZXMoKTtcblx0bV90ZXh0dXJlX2NhY2hlLlJ1bkdhcmJhZ2VDb2xsZWN0b3IoKTtcblx0bV9idWZmZXJfY2FjaGUuUnVuR2FyYmFnZUNvbGxlY3RvcigpO1xufSIiIgpuZXcgPSAiIiJ2b2lkIFJlbmRlckNvbnRleHQ6OlJ1bkdhcmJhZ2VDb2xsZWN0b3IoKSB7XG5cdHVzaW5nIFBlcmZDbG9jayA9IHN0ZDo6Y2hyb25vOjpzdGVhZHlfY2xvY2s7XG5cdGNvbnN0IGF1dG8gdDAgPSBQZXJmQ2xvY2s6Om5vdygpO1xuXHRpZiAobV9mYXVsdF9wcm9jZXNzX3BlbmRpbmcpIHtcblx0XHRtX2ZhdWx0X3Byb2Nlc3NfcGVuZGluZyA9IGZhbHNlO1xuXHRcdG1fYnVmZmVyX2NhY2hlLlByb2Nlc3NGYXVsdEJ1ZmZlcigpO1xuXHR9XG5cdGNvbnN0IGF1dG8gdDEgPSBQZXJmQ2xvY2s6Om5vdygpO1xuXHRtX3RleHR1cmVfY2FjaGUuUHJvY2Vzc0Rvd25sb2FkSW1hZ2VzKCk7XG5cdGNvbnN0IGF1dG8gdDIgPSBQZXJmQ2xvY2s6Om5vdygpO1xuXHRtX3RleHR1cmVfY2FjaGUuUnVuR2FyYmFnZUNvbGxlY3RvcigpO1xuXHRjb25zdCBhdXRvIHQzID0gUGVyZkNsb2NrOjpub3coKTtcblx0bV9idWZmZXJfY2FjaGUuUnVuR2FyYmFnZUNvbGxlY3RvcigpO1xuXHRjb25zdCBhdXRvIHQ0ID0gUGVyZkNsb2NrOjpub3coKTtcblxuXHRzdGF0aWMgdGhyZWFkX2xvY2FsIHVpbnQ2NF90IHBlcmZfY2FsbHMgPSAwO1xuXHRzdGF0aWMgdGhyZWFkX2xvY2FsIHVpbnQ2NF90IHBlcmZfZmF1bHRfdXMgPSAwO1xuXHRzdGF0aWMgdGhyZWFkX2xvY2FsIHVpbnQ2NF90IHBlcmZfZG93bmxvYWRfdXMgPSAwO1xuXHRzdGF0aWMgdGhyZWFkX2xvY2FsIHVpbnQ2NF90IHBlcmZfdGV4X2djX3VzID0gMDtcblx0c3RhdGljIHRocmVhZF9sb2NhbCB1aW50NjRfdCBwZXJmX2J1Zl9nY191cyA9IDA7XG5cdGF1dG8gdXMgPSBbXShhdXRvIGEsIGF1dG8gYikge1xuXHRcdHJldHVybiBzdGF0aWNfY2FzdDx1aW50NjRfdD4oXG5cdFx0ICAgIHN0ZDo6Y2hyb25vOjpkdXJhdGlvbl9jYXN0PHN0ZDo6Y2hyb25vOjptaWNyb3NlY29uZHM+KGIgLSBhKS5jb3VudCgpKTtcblx0fTtcblx0cGVyZl9mYXVsdF91cyAgICArPSB1cyh0MCwgdDEpO1xuXHRwZXJmX2Rvd25sb2FkX3VzICs9IHVzKHQxLCB0Mik7XG5cdHBlcmZfdGV4X2djX3VzICAgKz0gdXModDIsIHQzKTtcblx0cGVyZl9idWZfZ2NfdXMgICArPSB1cyh0MywgdDQpO1xuXHRwZXJmX2NhbGxzKys7XG5cdGlmICgocGVyZl9jYWxscyAlIDYwdSkgPT0gMCkge1xuXHRcdExPR0YoIltQRVJGXSBnYzYwIGZhdWx0X21zPSUuM2YgZG93bmxvYWRzX21zPSUuM2YgdGV4Z2NfbXM9JS4zZiBidWZnY19tcz0lLjNmIHRvdGFsX21zPSUuM2ZcXG4iLFxuXHRcdCAgICAgc3RhdGljX2Nhc3Q8ZG91YmxlPihwZXJmX2ZhdWx0X3VzKSAvIDEwMDAuMCxcblx0XHQgICAgIHN0YXRpY19jYXN0PGRvdWJsZT4ocGVyZl9kb3dubG9hZF91cykgLyAxMDAwLjAsXG5cdFx0ICAgICBzdGF0aWNfY2FzdDxkb3VibGU+KHBlcmZfdGV4X2djX3VzKSAvIDEwMDAuMCxcblx0XHQgICAgIHN0YXRpY19jYXN0PGRvdWJsZT4ocGVyZl9idWZfZ2NfdXMpIC8gMTAwMC4wLFxuXHRcdCAgICAgc3RhdGljX2Nhc3Q8ZG91YmxlPihwZXJmX2ZhdWx0X3VzICsgcGVyZl9kb3dubG9hZF91cyArIHBlcmZfdGV4X2djX3VzICsgcGVyZl9idWZfZ2NfdXMpIC8gMTAwMC4wKTtcblx0XHRwZXJmX2ZhdWx0X3VzID0gcGVyZl9kb3dubG9hZF91cyA9IHBlcmZfdGV4X2djX3VzID0gcGVyZl9idWZfZ2NfdXMgPSAwO1xuXHR9XG59IiIiCmlmIG9sZCBub3QgaW4gczoKICAgIHJhaXNlIFN5c3RlbUV4aXQoIlJ1bkdhcmJhZ2VDb2xsZWN0b3IgYmxvY2sgbm90IGZvdW5kIikKcyA9IHMucmVwbGFjZShvbGQsIG5ldywgMSkKcC53cml0ZV90ZXh0KHMpCgojIFRpbWUgcXVldWUgc3VibWlzc2lvbnMuIFRoaXMgY2F0Y2hlcyBkcml2ZXItc2lkZSBzdWJtaXQgYmxvY2tpbmcgc2VwYXJhdGVseSBmcm9tIHRpbWVsaW5lIHdhaXRzLgpwID0gUGF0aCgic3JjL2dyYXBoaWNzL2hvc3RfZ3B1L3JlbmRlcmVyL2NvbW1hbmRTY2hlZHVsZXIuY3BwIikKcyA9IHAucmVhZF90ZXh0KCkKaWYgIiNpbmNsdWRlIDxjaHJvbm8+IiBub3QgaW4gczoKICAgIHMgPSBzLnJlcGxhY2UoIiNpbmNsdWRlIDxhbGdvcml0aG0+XG4iLCAiI2luY2x1ZGUgPGFsZ29yaXRobT5cbiNpbmNsdWRlIDxjaHJvbm8+XG4iLCAxKQpvbGQgPSAiIiJcdFx0cmVzdWx0ID0gZ3JhcGhpY3MucXVldWUuc3VibWl0KDEsICZzdWJtaXRfaW5mbywgbnVsbHB0cik7XG5cdH0iIiIKbmV3ID0gIiIiXHRcdGNvbnN0IGF1dG8gcGVyZl9zdWJtaXRfYmVnaW4gPSBzdGQ6OmNocm9ubzo6c3RlYWR5X2Nsb2NrOjpub3coKTtcblx0XHRyZXN1bHQgPSBncmFwaGljcy5xdWV1ZS5zdWJtaXQoMSwgJnN1Ym1pdF9pbmZvLCBudWxscHRyKTtcblx0XHRjb25zdCBhdXRvIHBlcmZfc3VibWl0X2VuZCA9IHN0ZDo6Y2hyb25vOjpzdGVhZHlfY2xvY2s6Om5vdygpO1xuXHRcdGNvbnN0IGF1dG8gcGVyZl9zdWJtaXRfdXMgPSBzdGF0aWNfY2FzdDx1aW50NjRfdD4oXG5cdFx0ICAgIHN0ZDo6Y2hyb25vOjpkdXJhdGlvbl9jYXN0PHN0ZDo6Y2hyb25vOjptaWNyb3NlY29uZHM+KHBlcmZfc3VibWl0X2VuZCAtIHBlcmZfc3VibWl0X2JlZ2luKS5jb3VudCgpKTtcblx0XHRzdGF0aWMgdGhyZWFkX2xvY2FsIHVpbnQ2NF90IHBlcmZfc3VibWl0X2NvdW50ID0gMDtcblx0XHRzdGF0aWMgdGhyZWFkX2xvY2FsIHVpbnQ2NF90IHBlcmZfc3VibWl0X3RvdGFsX3VzID0gMDtcblx0XHRzdGF0aWMgdGhyZWFkX2xvY2FsIHVpbnQ2NF90IHBlcmZfc3VibWl0X21heF91cyA9IDA7XG5cdFx0cGVyZl9zdWJtaXRfY291bnQrKztcblx0XHRwZXJmX3N1Ym1pdF90b3RhbF91cyArPSBwZXJmX3N1Ym1pdF91cztcblx0XHRwZXJmX3N1Ym1pdF9tYXhfdXMgPSBzdGQ6Om1heChwZXJmX3N1Ym1pdF9tYXhfdXMsIHBlcmZfc3VibWl0X3VzKTtcblx0XHRpZiAoKHBlcmZfc3VibWl0X2NvdW50ICYgMjU1dSkgPT0gMCkge1xuXHRcdFx0TE9HRigiW1BFUkZdIHF1ZXVlX3N1Ym1pdCB4MjU2IHRvdGFsX21zPSUuM2YgYXZnX3VzPSUuM2YgbWF4X21zPSUuM2ZcXG4iLFxuXHRcdFx0ICAgICBzdGF0aWNfY2FzdDxkb3VibGU+KHBlcmZfc3VibWl0X3RvdGFsX3VzKSAvIDEwMDAuMCxcblx0XHRcdCAgICAgc3RhdGljX2Nhc3Q8ZG91YmxlPihwZXJmX3N1Ym1pdF90b3RhbF91cykgLyAyNTYuMCxcblx0XHRcdCAgICAgc3RhdGljX2Nhc3Q8ZG91YmxlPihwZXJmX3N1Ym1pdF9tYXhfdXMpIC8gMTAwMC4wKTtcblx0XHRcdHBlcmZfc3VibWl0X2NvdW50ID0gMDtcblx0XHRcdHBlcmZfc3VibWl0X3RvdGFsX3VzID0gMDtcblx0XHRcdHBlcmZfc3VibWl0X21heF91cyA9IDA7XG5cdFx0fVxuXHR9IiIiCmlmIG9sZCBub3QgaW4gczoKICAgIHJhaXNlIFN5c3RlbUV4aXQoInF1ZXVlIHN1Ym1pdCBibG9jayBub3QgZm91bmQiKQpzID0gcy5yZXBsYWNlKG9sZCwgbmV3LCAxKQpwLndyaXRlX3RleHQocykK"
-          $script = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
-          $script | python -
+          $path = "src/graphics/host_gpu/renderer/masterSemaphore.cpp"
+          $text = Get-Content $path -Raw
+          $old = @'
+          	const auto wait_start = std::chrono::steady_clock::now();
+          	const auto result     = m_graphics.device.waitSemaphores(&wait_info, UINT64_MAX);
+          	if (result == vk::Result::eErrorDeviceLost) {
+          '@
+          $new = @'
+          	const auto wait_start = std::chrono::steady_clock::now();
+          	const auto result     = m_graphics.device.waitSemaphores(&wait_info, UINT64_MAX);
+          	const auto wait_end   = std::chrono::steady_clock::now();
+          	const auto wait_ms    = std::chrono::duration_cast<std::chrono::milliseconds>(wait_end - wait_start).count();
+          	if (wait_ms >= 10) {
+          		LOGF("[PERF] timeline_wait_ms=%lld tick=%llu\n", static_cast<long long>(wait_ms),
+          		     static_cast<unsigned long long>(tick));
+          	}
+          	if (result == vk::Result::eErrorDeviceLost) {
+          '@
+          if (-not $text.Contains($old)) { throw "master semaphore wait block not found" }
+          $text = $text.Replace($old, $new)
+          Set-Content -Path $path -Value $text -NoNewline
 
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -97,7 +115,7 @@ jobs:
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON ^
             -DKYTY_BUILD_ORIGIN=Fork ^
             -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 ^
-            -DKYTY_RELEASE_TAG=KytyPS5-PR558-DS-perf-profile ^
+            -DKYTY_RELEASE_TAG=KytyPS5-PR558-DS-perf-timeline ^
             -DCMAKE_C_COMPILER=clang-cl ^
             -DCMAKE_CXX_COMPILER=clang-cl ^
             -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
@@ -113,6 +131,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-PR558-DS-Perf-Profile
+          name: KytyPS5-Windows-x64-PR558-DS-Perf-Timeline
           path: _Build/windows/install/**
           if-no-files-found: error
