@@ -49,6 +49,26 @@ jobs:
           $text = $text.Replace($oldError, $newError)
           Set-Content -Path $path -Value $text -NoNewline
 
+      - name: Fix Clang enum narrowing errors in PR500 SPIR-V builder
+        shell: pwsh
+        run: |
+          $path = "src/graphics/shader/recompiler/backend/spirv/SpirvBuilder.cpp"
+          $text = Get-Content $path -Raw
+          $replacements = @(
+            @("{capability}", "{static_cast<uint32_t>(capability)}"),
+            @("std::vector<uint32_t> words {opcode, id};", "std::vector<uint32_t> words {static_cast<uint32_t>(opcode), id};"),
+            @("std::vector<uint32_t> key {opcode, static_cast<uint32_t>(operands.size())};", "std::vector<uint32_t> key {static_cast<uint32_t>(opcode), static_cast<uint32_t>(operands.size())};"),
+            @("words = {annotation.opcode, id};", "words = {static_cast<uint32_t>(annotation.opcode), id};"),
+            @("std::vector<uint32_t> words {opcode, type, id};", "std::vector<uint32_t> words {static_cast<uint32_t>(opcode), type, id};"),
+            @("{pointer_type, id, storage_class}", "{pointer_type, id, static_cast<uint32_t>(storage_class)}"),
+            @("{execution_model, entry_point}", "{static_cast<uint32_t>(execution_model), entry_point}")
+          )
+          foreach ($r in $replacements) {
+            if (-not $text.Contains($r[0])) { throw "SPIR-V narrowing pattern not found: $($r[0])" }
+            $text = $text.Replace($r[0], $r[1])
+          }
+          Set-Content -Path $path -Value $text -NoNewline
+
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
 
