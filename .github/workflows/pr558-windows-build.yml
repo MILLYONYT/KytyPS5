@@ -1,4 +1,4 @@
-name: PR500 Demon Souls Performance Windows Build
+name: PR599 Demon Souls Performance Windows Build
 
 on:
   push:
@@ -11,132 +11,13 @@ jobs:
   windows:
     runs-on: windows-2022
     steps:
-      - name: Checkout Demon Souls PR500 source
+      - name: Checkout Demon Souls PR599 source
         uses: actions/checkout@v4
         with:
-          repository: TarkusR/KytyPS5
-          ref: 5616e9716151784260d795202a8a8e285e1b00b2
+          repository: chenxiao07/KytyPS5
+          ref: fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7
           submodules: recursive
           fetch-depth: 0
-
-      - name: Balance texture GC under VRAM pressure
-        shell: pwsh
-        run: |
-          $path = "src/graphics/host_gpu/renderer/cache/textureCache.cpp"
-          $text = Get-Content $path -Raw
-          $oldAge = "const uint64_t age       = std::min<uint64_t>(aggressive ? 160 : pressured ? 80 : 16, tick);"
-          $newAge = "const uint64_t age       = std::min<uint64_t>(aggressive ? 64 : pressured ? 32 : 16, tick);"
-          $oldDelete = "size_t         deletions = aggressive ? 40 : pressured ? 20 : 10;"
-          $newDelete = "size_t         deletions = aggressive ? 80 : pressured ? 40 : 10;"
-          if (-not $text.Contains($oldAge)) { throw "texture GC age block not found" }
-          if (-not $text.Contains($oldDelete)) { throw "texture GC deletion block not found" }
-          $text = $text.Replace($oldAge, $newAge).Replace($oldDelete, $newDelete)
-          Set-Content -Path $path -Value $text -NoNewline
-
-      - name: Increase BufferCache download staging to 256 MiB
-        shell: pwsh
-        run: |
-          $path = "src/graphics/host_gpu/renderer/cache/bufferCache.cpp"
-          $text = Get-Content $path -Raw
-          $oldBuffer = "m_download_buffer(graphics, scheduler, MemoryUsage::Download, 32 * MiB),"
-          $newBuffer = "m_download_buffer(graphics, scheduler, MemoryUsage::Download, 256 * MiB),"
-          $oldError = "BufferCache: download exceeds 32 MiB staging buffer capacity"
-          $newError = "BufferCache: download exceeds 256 MiB staging buffer capacity"
-          if (-not $text.Contains($oldBuffer)) { throw "32 MiB download buffer definition not found" }
-          if (-not $text.Contains($oldError)) { throw "32 MiB download capacity text not found" }
-          $text = $text.Replace($oldBuffer, $newBuffer).Replace($oldError, $newError)
-          Set-Content -Path $path -Value $text -NoNewline
-
-      - name: Fix Clang enum narrowing errors in PR500 SPIR-V code
-        shell: pwsh
-        run: |
-          $path = "src/graphics/shader/recompiler/backend/spirv/SpirvBuilder.cpp"
-          $text = Get-Content $path -Raw
-          $replacements = @(
-            @("{capability}", "{static_cast<uint32_t>(capability)}"),
-            @("std::vector<uint32_t> words {opcode, id};", "std::vector<uint32_t> words {static_cast<uint32_t>(opcode), id};"),
-            @("std::vector<uint32_t> key {opcode, static_cast<uint32_t>(operands.size())};", "std::vector<uint32_t> key {static_cast<uint32_t>(opcode), static_cast<uint32_t>(operands.size())};"),
-            @("words = {annotation.opcode, id};", "words = {static_cast<uint32_t>(annotation.opcode), id};"),
-            @("std::vector<uint32_t> words {opcode, type, id};", "std::vector<uint32_t> words {static_cast<uint32_t>(opcode), type, id};"),
-            @("{pointer_type, id, storage_class}", "{pointer_type, id, static_cast<uint32_t>(storage_class)}"),
-            @("{execution_model, entry_point}", "{static_cast<uint32_t>(execution_model), entry_point}")
-          )
-          foreach ($r in $replacements) {
-            if (-not $text.Contains($r[0])) { throw "SPIR-V builder narrowing pattern not found: $($r[0])" }
-            $text = $text.Replace($r[0], $r[1])
-          }
-          Set-Content -Path $path -Value $text -NoNewline
-
-          $path = "src/graphics/shader/recompiler/backend/spirv/spirvEmitterInternal.h"
-          $text = Get-Content $path -Raw
-          $old = "state.builder.AddFunction({opcode, TypeId(state, type), result, args...});"
-          $new = "state.builder.AddFunction({static_cast<uint32_t>(opcode), TypeId(state, type), result, static_cast<uint32_t>(args)...});"
-          if (-not $text.Contains($old)) { throw "SPIR-V emitter AddFunction pattern not found" }
-          $text = $text.Replace($old, $new)
-          Set-Content -Path $path -Value $text -NoNewline
-
-          $path = "src/graphics/shader/recompiler/backend/spirv/spirvEmitterAlu.cpp"
-          $text = Get-Content $path -Raw
-          $old = "{signed_value ? spv::OpSMulExtended : spv::OpUMulExtended, pair_type,"
-          $new = "{static_cast<uint32_t>(signed_value ? spv::OpSMulExtended : spv::OpUMulExtended), pair_type,"
-          if (-not $text.Contains($old)) { throw "SPIR-V extended multiply narrowing pattern not found" }
-          $text = $text.Replace($old, $new)
-          Set-Content -Path $path -Value $text -NoNewline
-
-          $path = "src/graphics/shader/recompiler/backend/spirv/spirvEmitterAluHelpers.cpp"
-          $text = Get-Content $path -Raw
-          $replacements = @(
-            @("{max_value ? spv::OpUGreaterThan : spv::OpULessThan, TypeBool(state), cond, lhs, rhs}", "{static_cast<uint32_t>(max_value ? spv::OpUGreaterThan : spv::OpULessThan), TypeBool(state), cond, lhs, rhs}"),
-            @("{max_value ? spv::OpSGreaterThan : spv::OpSLessThan, TypeBool(state), cond, lhs, rhs}", "{static_cast<uint32_t>(max_value ? spv::OpSGreaterThan : spv::OpSLessThan), TypeBool(state), cond, lhs, rhs}"),
-            @("{max_value ? spv::OpFOrdGreaterThanEqual : spv::OpFOrdLessThan,", "{static_cast<uint32_t>(max_value ? spv::OpFOrdGreaterThanEqual : spv::OpFOrdLessThan),")
-          )
-          foreach ($r in $replacements) {
-            if (-not $text.Contains($r[0])) { throw "SPIR-V ALU helper narrowing pattern not found: $($r[0])" }
-            $text = $text.Replace($r[0], $r[1])
-          }
-          Set-Content -Path $path -Value $text -NoNewline
-
-          $path = "src/graphics/shader/recompiler/backend/spirv/spirvEmitterFlow.cpp"
-          $text = Get-Content $path -Raw
-          $old = "MrtOutputMode(state, exp) == 5u ? GLSLstd450UnpackUnorm2x16 : GLSLstd450UnpackHalf2x16;"
-          $new = "static_cast<uint32_t>(MrtOutputMode(state, exp) == 5u ? GLSLstd450UnpackUnorm2x16 : GLSLstd450UnpackHalf2x16);"
-          if (-not $text.Contains($old)) { throw "SPIR-V flow unpack narrowing pattern not found" }
-          $text = $text.Replace($old, $new)
-          Set-Content -Path $path -Value $text -NoNewline
-
-          $path = "src/graphics/shader/rectListShader.cpp"
-          $text = Get-Content $path -Raw
-          $replacements = @(
-            @("return builder.Type(opcode, {operands...});", "return builder.Type(opcode, {static_cast<uint32_t>(operands)...});"),
-            @("builder.AddFunction({opcode, type, id, operands...});", "builder.AddFunction({static_cast<uint32_t>(opcode), type, id, static_cast<uint32_t>(operands)...});"),
-            @("builder.AddFunction({opcode, id, operands...});", "builder.AddFunction({static_cast<uint32_t>(opcode), id, static_cast<uint32_t>(operands)...});"),
-            @("builder.AddFunction({opcode, operands...});", "builder.AddFunction({static_cast<uint32_t>(opcode), static_cast<uint32_t>(operands)...});"),
-            @("builder.AddAnnotation({spv::OpDecorate, target, decoration, value});", "builder.AddAnnotation({spv::OpDecorate, target, static_cast<uint32_t>(decoration), value});")
-          )
-          foreach ($r in $replacements) {
-            if (-not $text.Contains($r[0])) { throw "rectListShader narrowing pattern not found: $($r[0])" }
-            $text = $text.Replace($r[0], $r[1])
-          }
-          Set-Content -Path $path -Value $text -NoNewline
-
-          $patches = @(
-            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterMemoryHelpers.cpp", "max_value ? spv::OpUGreaterThan : spv::OpULessThan", "static_cast<uint32_t>(max_value ? spv::OpUGreaterThan : spv::OpULessThan)"),
-            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterMesh.cpp", "output.kind == IR::StageOutputKind::Layer ? spv::BuiltInLayer", "static_cast<uint32_t>(output.kind == IR::StageOutputKind::Layer ? spv::BuiltInLayer"),
-            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterMesh.cpp", ": spv::BuiltInPosition});", ": spv::BuiltInPosition)});"),
-            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterModule.cpp", "{storage_class, pointee}", "{static_cast<uint32_t>(storage_class), pointee}"),
-            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterModule.cpp", "spv::DecorationBuiltIn, builtin}", "spv::DecorationBuiltIn, static_cast<uint32_t>(builtin)}"),
-            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterModule.cpp", "{state.program.info.uses_dma", "{static_cast<uint32_t>(state.program.info.uses_dma"),
-            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterModule.cpp", ": spv::AddressingModelLogical,", ": spv::AddressingModelLogical),"),
-            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterProgram.cpp", "{zero ? spv::OpIEqual : spv::OpINotEqual,", "{static_cast<uint32_t>(zero ? spv::OpIEqual : spv::OpINotEqual),"),
-            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterMemory.cpp", "{IsSignedFormatComponent(info.type) ? spv::OpBitFieldSExtract : spv::OpBitFieldUExtract,", "{static_cast<uint32_t>(IsSignedFormatComponent(info.type) ? spv::OpBitFieldSExtract : spv::OpBitFieldUExtract),"),
-            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterMemory.cpp", "{append ? spv::OpAtomicIAdd : spv::OpAtomicISub,", "{static_cast<uint32_t>(append ? spv::OpAtomicIAdd : spv::OpAtomicISub),")
-          )
-          foreach ($p in $patches) {
-            $text = Get-Content $p[0] -Raw
-            if (-not $text.Contains($p[1])) { throw "additional SPIR-V narrowing pattern not found: $($p[1])" }
-            $text = $text.Replace($p[1], $p[2])
-            Set-Content -Path $p[0] -Value $text -NoNewline
-          }
 
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -187,7 +68,7 @@ jobs:
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON ^
             -DKYTY_BUILD_ORIGIN=Fork ^
             -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 ^
-            -DKYTY_RELEASE_TAG=KytyPS5-PR500-DS-256MiB-LTO ^
+            -DKYTY_RELEASE_TAG=KytyPS5-PR599-DS-LTO ^
             -DCMAKE_C_COMPILER=clang-cl ^
             -DCMAKE_CXX_COMPILER=clang-cl ^
             -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
@@ -203,6 +84,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-PR500-DS-256MiB-LTO
+          name: KytyPS5-Windows-x64-PR599-DS-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
