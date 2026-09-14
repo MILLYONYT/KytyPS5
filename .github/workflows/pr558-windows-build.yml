@@ -26,6 +26,47 @@ jobs:
           $text = $text.Replace("current = std::min(region_end, end);", "current = (region_end < end ? region_end : end);")
           Set-Content -Path $path -Value $text -NoNewline
 
+      - name: Add image creation failure diagnostics
+        shell: pwsh
+        run: |
+          $path = "src/graphics/host_gpu/renderer/image/image.cpp"
+          $text = Get-Content $path -Raw
+          $old = @'
+	if (!graphics.CreateImage(create, backing)) {
+		EXIT("failed to create image: extent=%ux%ux%u format=%d layers=%u levels=%u\n",
+		     create.extent.width, create.extent.height, create.extent.depth,
+		     static_cast<int>(create.format), create.arrayLayers, create.mipLevels);
+	}
+'@
+          $new = @'
+	if (!graphics.CreateImage(create, backing)) {
+		EXIT("failed to create image:\n"
+		     " create: extent=%ux%ux%u format=%d type=%d layers=%u levels=%u usage=0x%x flags=0x%x samples=0x%x\n"
+		     " limits: maxExtent=%ux%ux%u maxMipLevels=%u maxArrayLayers=%u sampleCounts=0x%x maxResourceSize=0x%016llx\n"
+		     " guest: format=%u type=%u pitch=%u bytesPerBlock=%u samples=%u tileMode=%u data=0x%016llx+0x%016llx stencil=0x%016llx+0x%016llx\n"
+		     " metadata: kind=%u range=0x%016llx+0x%016llx control=0x%08x compression=%u stencilCompressed=%u\n",
+		     create.extent.width, create.extent.height, create.extent.depth,
+		     static_cast<int>(create.format), static_cast<int>(create.imageType), create.arrayLayers,
+		     create.mipLevels, static_cast<vk::ImageUsageFlags::MaskType>(create.usage),
+		     static_cast<vk::ImageCreateFlags::MaskType>(create.flags),
+		     static_cast<vk::SampleCountFlags::MaskType>(create.samples), properties.maxExtent.width,
+		     properties.maxExtent.height, properties.maxExtent.depth, properties.maxMipLevels,
+		     properties.maxArrayLayers, static_cast<vk::SampleCountFlags::MaskType>(properties.sampleCounts),
+		     static_cast<unsigned long long>(properties.maxResourceSize),
+		     static_cast<uint32_t>(info.guest_format), static_cast<uint32_t>(info.type), info.pitch,
+		     info.bytes_per_block, info.samples, static_cast<uint32_t>(info.tile_mode),
+		     static_cast<unsigned long long>(info.data.address), static_cast<unsigned long long>(info.data.size),
+		     static_cast<unsigned long long>(info.stencil.address), static_cast<unsigned long long>(info.stencil.size),
+		     static_cast<uint32_t>(info.metadata.kind),
+		     static_cast<unsigned long long>(info.metadata.range.address),
+		     static_cast<unsigned long long>(info.metadata.range.size), info.metadata.control,
+		     static_cast<uint32_t>(info.metadata.compression), info.metadata.stencil_compressed ? 1u : 0u);
+	}
+'@
+          if (-not $text.Contains($old)) { throw "Image failure block not found" }
+          $text = $text.Replace($old, $new)
+          Set-Content -Path $path -Value $text -NoNewline
+
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
 
