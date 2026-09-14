@@ -30,8 +30,7 @@ jobs:
           $newDelete = "size_t         deletions = aggressive ? 80 : pressured ? 40 : 10;"
           if (-not $text.Contains($oldAge)) { throw "texture GC age block not found" }
           if (-not $text.Contains($oldDelete)) { throw "texture GC deletion block not found" }
-          $text = $text.Replace($oldAge, $newAge)
-          $text = $text.Replace($oldDelete, $newDelete)
+          $text = $text.Replace($oldAge, $newAge).Replace($oldDelete, $newDelete)
           Set-Content -Path $path -Value $text -NoNewline
 
       - name: Increase BufferCache download staging to 256 MiB
@@ -45,11 +44,10 @@ jobs:
           $newError = "BufferCache: download exceeds 256 MiB staging buffer capacity"
           if (-not $text.Contains($oldBuffer)) { throw "32 MiB download buffer definition not found" }
           if (-not $text.Contains($oldError)) { throw "32 MiB download capacity text not found" }
-          $text = $text.Replace($oldBuffer, $newBuffer)
-          $text = $text.Replace($oldError, $newError)
+          $text = $text.Replace($oldBuffer, $newBuffer).Replace($oldError, $newError)
           Set-Content -Path $path -Value $text -NoNewline
 
-      - name: Fix Clang enum narrowing errors in PR500 SPIR-V builder
+      - name: Fix Clang enum narrowing errors in PR500 SPIR-V code
         shell: pwsh
         run: |
           $path = "src/graphics/shader/recompiler/backend/spirv/SpirvBuilder.cpp"
@@ -64,9 +62,25 @@ jobs:
             @("{execution_model, entry_point}", "{static_cast<uint32_t>(execution_model), entry_point}")
           )
           foreach ($r in $replacements) {
-            if (-not $text.Contains($r[0])) { throw "SPIR-V narrowing pattern not found: $($r[0])" }
+            if (-not $text.Contains($r[0])) { throw "SPIR-V builder narrowing pattern not found: $($r[0])" }
             $text = $text.Replace($r[0], $r[1])
           }
+          Set-Content -Path $path -Value $text -NoNewline
+
+          $path = "src/graphics/shader/recompiler/backend/spirv/spirvEmitterInternal.h"
+          $text = Get-Content $path -Raw
+          $old = "state.builder.AddFunction({opcode, TypeId(state, type), result, args...});"
+          $new = "state.builder.AddFunction({static_cast<uint32_t>(opcode), TypeId(state, type), result, static_cast<uint32_t>(args)...});"
+          if (-not $text.Contains($old)) { throw "SPIR-V emitter AddFunction pattern not found" }
+          $text = $text.Replace($old, $new)
+          Set-Content -Path $path -Value $text -NoNewline
+
+          $path = "src/graphics/shader/recompiler/backend/spirv/spirvEmitterAlu.cpp"
+          $text = Get-Content $path -Raw
+          $old = "{signed_value ? spv::OpSMulExtended : spv::OpUMulExtended, pair_type,"
+          $new = "{static_cast<uint32_t>(signed_value ? spv::OpSMulExtended : spv::OpUMulExtended), pair_type,"
+          if (-not $text.Contains($old)) { throw "SPIR-V extended multiply narrowing pattern not found" }
+          $text = $text.Replace($old, $new)
           Set-Content -Path $path -Value $text -NoNewline
 
       - name: Setup Visual Studio environment
