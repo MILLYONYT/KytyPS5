@@ -26,9 +26,25 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git fetch https://github.com/Techx3/KytyPS5.git a6ebfb5208b61852b4e3f34c03bda677f2861533
           git cherry-pick --no-commit a6ebfb5208b61852b4e3f34c03bda677f2861533
-          # PR599 has a newer SRT walker implementation. PR506's older SRT hunk contains
-          # literal merge markers against this snapshot, so preserve the frozen PR599 file.
-          git restore --source=HEAD --staged --worktree -- src/graphics/shader/recompiler/ir/passes/SrtWalker.h
+
+          # PR599 has newer implementations in these files. Keep the proven PR599
+          # versions and retain only PR506 changes that apply cleanly elsewhere.
+          $pr599Wins = @(
+            'src/graphics/host_gpu/renderer/pipeline/pipelineCache.cpp',
+            'src/graphics/host_gpu/renderer/renderCompute.cpp',
+            'src/graphics/shader/recompiler/ir/passes/ResourceMaterialization.cpp',
+            'src/graphics/shader/recompiler/ir/passes/SrtWalker.h'
+          )
+          foreach ($path in $pr599Wins) {
+            git restore --source=HEAD --staged --worktree -- $path
+          }
+          git add -A
+
+          $unmerged = git diff --name-only --diff-filter=U
+          if ($unmerged) {
+            Write-Error "Unresolved merge conflicts remain: $unmerged"
+            exit 1
+          }
           if (git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- src) {
             Write-Error "Unresolved merge markers remain after PR506 adaptation"
             exit 1
