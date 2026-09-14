@@ -104,6 +104,25 @@ jobs:
           $text = $text.Replace($old, $new)
           Set-Content -Path $path -Value $text -NoNewline
 
+          $patches = @(
+            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterMemoryHelpers.cpp", "max_value ? spv::OpUGreaterThan : spv::OpULessThan", "static_cast<uint32_t>(max_value ? spv::OpUGreaterThan : spv::OpULessThan)"),
+            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterMesh.cpp", "output.kind == IR::StageOutputKind::Layer ? spv::BuiltInLayer", "static_cast<uint32_t>(output.kind == IR::StageOutputKind::Layer ? spv::BuiltInLayer"),
+            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterMesh.cpp", ": spv::BuiltInPosition});", ": spv::BuiltInPosition)});"),
+            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterModule.cpp", "{storage_class, pointee}", "{static_cast<uint32_t>(storage_class), pointee}"),
+            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterModule.cpp", "spv::DecorationBuiltIn, builtin}", "spv::DecorationBuiltIn, static_cast<uint32_t>(builtin)}"),
+            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterModule.cpp", "{state.program.info.uses_dma", "{static_cast<uint32_t>(state.program.info.uses_dma"),
+            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterModule.cpp", ": spv::AddressingModelLogical,", ": spv::AddressingModelLogical),"),
+            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterProgram.cpp", "{zero ? spv::OpIEqual : spv::OpINotEqual,", "{static_cast<uint32_t>(zero ? spv::OpIEqual : spv::OpINotEqual),"),
+            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterMemory.cpp", "{IsSignedFormatComponent(info.type) ? spv::OpBitFieldSExtract : spv::OpBitFieldUExtract,", "{static_cast<uint32_t>(IsSignedFormatComponent(info.type) ? spv::OpBitFieldSExtract : spv::OpBitFieldUExtract),"),
+            @("src/graphics/shader/recompiler/backend/spirv/spirvEmitterMemory.cpp", "{append ? spv::OpAtomicIAdd : spv::OpAtomicISub,", "{static_cast<uint32_t>(append ? spv::OpAtomicIAdd : spv::OpAtomicISub),")
+          )
+          foreach ($p in $patches) {
+            $text = Get-Content $p[0] -Raw
+            if (-not $text.Contains($p[1])) { throw "additional SPIR-V narrowing pattern not found: $($p[1])" }
+            $text = $text.Replace($p[1], $p[2])
+            Set-Content -Path $p[0] -Value $text -NoNewline
+          }
+
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
 
