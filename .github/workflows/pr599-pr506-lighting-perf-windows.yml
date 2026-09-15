@@ -53,40 +53,29 @@ jobs:
             'src/graphics/host_gpu/renderer/cache/gpuResourceManager.h'
           )
           foreach ($path in $pr562Wins) { git checkout FETCH_HEAD -- $path; git add -- $path }
-          # PR506's pm4Handlers/graphicsRun need its ReleaseMemBatch API, while PR599 needs
-          # its newer compute-chain/draw-run methods. Start from PR506 then splice PR599-only API.
-          git checkout a6ebfb5208b61852b4e3f34c03bda677f2861533 -- src/graphics/guest_gpu/command_processor/commandProcessor.h
+          # Keep the entire PR599 command processor trio coherent. PR562 does not modify these
+          # files; mixing PR506's older header with PR599 graphicsRun caused the Build 21 errors.
+          $pr599CommandProcessor = @(
+            'src/graphics/guest_gpu/command_processor/commandProcessor.h',
+            'src/graphics/guest_gpu/command_processor/pm4Handlers.cpp',
+            'src/graphics/guest_gpu/graphicsRun.cpp'
+          )
+          foreach ($path in $pr599CommandProcessor) {
+            git checkout fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7 -- $path
+            git add -- $path
+          }
+          # PR562 removed BufferCache::ReportLodStats. PR599 only calls it from the optional PM4
+          # LOD statistics packet, so disable that diagnostic wrapper/call for this experiment.
           @'
           from pathlib import Path
-          import subprocess
-          p = Path('src/graphics/guest_gpu/command_processor/commandProcessor.h')
-          s = p.read_text(encoding='utf-8')
-          ref = subprocess.check_output(['git','show','fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7:src/graphics/guest_gpu/command_processor/commandProcessor.h'], text=True)
-          # Preserve PR599-only public methods used by PR599 graphicsRun/render paths.
-          wanted = ['BreakComputeChain', 'DispatchIndirectAddress', 'TryDrawIndirectRun']
-          for name in wanted:
-              if name in s: continue
-              lines = ref.splitlines()
-              hit = next((i for i,l in enumerate(lines) if name in l), None)
-              if hit is None: raise SystemExit(f'PR599 method {name} not found')
-              decl = lines[hit].strip()
-              anchor = '\tvoid DispatchIndirect(uint32_t offset, uint32_t size);\n'
-              if anchor not in s: raise SystemExit('CommandProcessor insertion anchor missing')
-              s = s.replace(anchor, anchor + '\t' + decl + '\n', 1)
-          # PR599 uses a five-argument DispatchDirect overload. Add its declaration if PR506 lacks it.
-          ref_lines = ref.splitlines()
-          for i,l in enumerate(ref_lines):
-              if 'DispatchDirect(' in l and 'uint32_t dim_x' in l:
-                  decl = l.strip()
-                  j=i+1
-                  while ';' not in decl and j < len(ref_lines): decl += ' ' + ref_lines[j].strip(); j += 1
-                  if decl not in s:
-                      anchor = '\tvoid DispatchIndirect(uint32_t offset, uint32_t size);\n'
-                      s = s.replace(anchor, '\t' + decl + '\n' + anchor, 1)
-                  break
-          # PR599 commandProcessor.h exposes ReportLodStats, but PR562 BufferCache intentionally does not.
-          # Remove only that wrapper; pm4Handlers does not require it for this DS experiment.
+          h = Path('src/graphics/guest_gpu/command_processor/commandProcessor.h')
+          s = h.read_text(encoding='utf-8')
           s = '\n'.join(l for l in s.splitlines() if 'void ReportLodStats(' not in l) + '\n'
+          h.write_text(s, encoding='utf-8')
+          p = Path('src/graphics/guest_gpu/command_processor/pm4Handlers.cpp')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('cp.ReportLodStats(dst, buffer_size, (buffer[3] & ((1u << 19) | (1u << 18))) != 0);',
+                        '(void)dst; (void)buffer_size; // PR562 BDA experiment: LOD stats unavailable')
           p.write_text(s, encoding='utf-8')
           '@ | python -
           git add -A
