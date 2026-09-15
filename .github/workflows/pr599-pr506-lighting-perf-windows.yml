@@ -65,6 +65,7 @@ jobs:
           }
           @'
           from pathlib import Path
+          import re
           h = Path('src/graphics/guest_gpu/command_processor/commandProcessor.h')
           s = h.read_text(encoding='utf-8')
           s = '\n'.join(l for l in s.splitlines() if 'void ReportLodStats(' not in l) + '\n'
@@ -74,15 +75,31 @@ jobs:
           s = s.replace('cp.ReportLodStats(dst, buffer_size, (buffer[3] & ((1u << 19) | (1u << 18))) != 0);',
                         '(void)dst; (void)buffer_size; // PR562 BDA experiment: LOD stats unavailable')
           p.write_text(s, encoding='utf-8')
-          # PR506 auto-merged a BufferCache CPU-write-window adapter into textureCache.cpp.
-          # PR562's BufferCache/MemoryTracker API does not have that adapter, so remove the stale
-          # out-of-line wrapper as a coordinated compatibility fix. It is not part of PR562's BDA path.
           t = Path('src/graphics/host_gpu/renderer/cache/textureCache.cpp')
           s = t.read_text(encoding='utf-8')
-          import re
           s2, n = re.subn(r'\nbool BufferCache::TryInvalidateCpuWriteWindow\(uint64_t fault, uint64_t begin, uint64_t size\) \{\n(?:.|\n)*?\n\}\n', '\n', s, count=1)
           if n != 1: raise SystemExit('stale TryInvalidateCpuWriteWindow wrapper not found exactly once')
           t.write_text(s2, encoding='utf-8')
+
+          # PR599 callsites depend on helper APIs removed by PR562's coordinated cache implementation.
+          # Keep PR562's own dirty-hint BDA synchronization and remove only the stale PR599-only hooks.
+          d = Path('src/graphics/host_gpu/renderer/pipeline/descriptors.cpp')
+          s = d.read_text(encoding='utf-8')
+          old = 'if (m_context.GetGpuResources().PrepareBdaReadRanges(first_ranges)) return;'
+          if old not in s: raise SystemExit('PrepareBdaReadRanges callsite not found')
+          s = s.replace(old, '(void)first_ranges; // PR562 performs BDA upload discovery from CPU-dirty hints', 1)
+          # LOD stats are diagnostic/accounting support from PR599 and not required by PR562 selective BDA.
+          s, n = re.subn(r'\s*const auto\* buffer = m_context\.GetBufferCache\(\)\.GetLodStatsBuffer\(\);',
+                         '\n                                                const Buffer* buffer = nullptr;', s, count=1)
+          if n != 1: raise SystemExit('GetLodStatsBuffer callsite not found')
+          d.write_text(s, encoding='utf-8')
+
+          r = Path('src/graphics/host_gpu/renderer/renderCompute.cpp')
+          s = r.read_text(encoding='utf-8')
+          old = 'm_context.GetBufferCache().EnsureBufferContents(indirect_args, 3u * sizeof(uint32_t));'
+          if old not in s: raise SystemExit('EnsureBufferContents callsite not found')
+          s = s.replace(old, '(void)indirect_args; // PR562 cache path synchronizes dirty BDA buffers through its own preparation path', 1)
+          r.write_text(s, encoding='utf-8')
           '@ | python -
           git add -A
           $unmerged = git diff --name-only --diff-filter=U
@@ -103,7 +120,6 @@ jobs:
           replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 && extent.width <= 4096;\n\t\tif (likely_large_shadow_map) { return false; }\n\t}\n#endif\n\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) {\n\t\tconst auto& extent = state.color_info[0].desc.info.extent;\n\t\tconst bool likely_small_postfx = extent.width >= 64 && extent.height >= 64 && extent.width <= 1024 && extent.height <= 1024;\n\t\tif (likely_small_postfx) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
           if needle not in s: raise SystemExit('Build13 render baseline anchor not found')
           draw.write_text(s.replace(needle, replacement, 1), encoding='utf-8')
-
           p = Path('src/graphics/host_gpu/renderer/cache/streamBuffer.cpp')
           s = p.read_text(encoding='utf-8')
           old = '''\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n\tVmaAllocationCreateInfo allocation_info {};'''
