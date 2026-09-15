@@ -105,13 +105,17 @@ jobs:
           s = s.replace('m_context.GetGpuResources().PreparationAliasEpoch()', '0ull')
           rd.write_text(s, encoding='utf-8')
 
-          # PR599 memory backing aliases call epoch-only hooks that PR562 does not expose.
-          # Draw-run epoch reuse is disabled above, so these compatibility hooks are intentionally no-op.
           gh = Path('src/graphics/host_gpu/renderer/cache/gpuResourceManager.h')
           s = gh.read_text(encoding='utf-8')
           anchor = '\tvoid               PrepareBda();\n'
           if anchor not in s: raise SystemExit('GpuResourceManager PrepareBda anchor not found')
-          s = s.replace(anchor, anchor + '\tvoid               BeginAliasWrite() noexcept {}\n\tvoid               EndAliasWrite() noexcept {}\n', 1)
+          compat = '''\tvoid               BeginAliasWrite() noexcept {}
+\tvoid               EndAliasWrite() noexcept {}
+\t[[nodiscard]] bool HasReadWatchers(uint64_t vaddr, uint64_t size) const noexcept {
+\t\treturn m_page_manager.HasReadWatchers(vaddr, size);
+\t}
+'''
+          s = s.replace(anchor, anchor + compat, 1)
           gh.write_text(s, encoding='utf-8')
           '@ | python -
           git add -A
