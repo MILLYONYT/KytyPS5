@@ -1,4 +1,4 @@
-name: PR599 + PR506 Demon Souls Binding Breakdown Profiling Build
+name: PR599 + PR506 Demon Souls FindBuffer Deep Profiling Build
 
 on:
   push:
@@ -41,33 +41,31 @@ jobs:
           if ($LASTEXITCODE -ne 1) { Write-Error "git grep conflict-marker check failed with exit code $LASTEXITCODE"; exit 1 }
           $global:LASTEXITCODE = 0
 
-      - name: Apply performance baseline and binding-stage profiler
+      - name: Apply 10-12-18 baseline and deep FindBuffer profiler
         shell: pwsh
         run: |
           @'
           from pathlib import Path
 
-          # Preserve current 10/12/18 performance baseline: selective shadows + conservative PostFX.
           draw = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
           s = draw.read_text(encoding='utf-8')
           needle = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
-          replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 &&\n\t\t                                    extent.width <= 4096;\n\t\tif (likely_large_shadow_map) { return false; }\n\t}\n#endif\n\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) {\n\t\tconst auto& extent = state.color_info[0].desc.info.extent;\n\t\tconst bool likely_small_postfx = extent.width >= 64 && extent.height >= 64 &&\n\t\t                                  extent.width <= 1024 && extent.height <= 1024;\n\t\tif (likely_small_postfx) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
-          if needle not in s: raise SystemExit('performance baseline patch anchor not found')
+          replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 && extent.width <= 4096;\n\t\tif (likely_large_shadow_map) { return false; }\n\t}\n#endif\n\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) {\n\t\tconst auto& extent = state.color_info[0].desc.info.extent;\n\t\tconst bool likely_small_postfx = extent.width >= 64 && extent.height >= 64 && extent.width <= 1024 && extent.height <= 1024;\n\t\tif (likely_small_postfx) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
+          if needle not in s: raise SystemExit('performance baseline anchor not found')
           draw.write_text(s.replace(needle, replacement, 1), encoding='utf-8')
 
-          # Break PrepareGraphicsBindings into the exact stages implicated by the first profile.
-          p = Path('src/graphics/host_gpu/renderer/pipeline/descriptors.cpp')
+          p = Path('src/graphics/host_gpu/renderer/cache/bufferCache.cpp')
           s = p.read_text(encoding='utf-8')
-          inc = '#include <atomic>\n'
-          if inc not in s: raise SystemExit('descriptor include anchor not found')
-          s = s.replace(inc, inc + '#include <chrono>\n#include <cstdio>\n', 1)
+          inc = '#include <algorithm>\n'
+          if inc not in s: raise SystemExit('buffer profiler include anchor not found')
+          s = s.replace(inc, inc + '#include <atomic>\n#include <chrono>\n#include <cstdio>\n', 1)
 
-          old = '''RenderExecutor::GraphicsBindings\nRenderExecutor::PrepareGraphicsBindings(const ShaderStageRuntime& vertex,\n                                        const ShaderStageRuntime& pixel, bool pixel_active) {\n\tGraphicsBindings bindings {\n\t    .vertex = PrepareBindings(vertex),\n\t};\n\tif (pixel_active) {\n\t\tbindings.pixel.emplace(PrepareBindings(pixel));\n\t}\n\tFindBuffers(bindings.vertex);\n\tif (bindings.pixel) {\n\t\tFindBuffers(*bindings.pixel);\n\t}\n\tPrepareBdaBindings(bindings.vertex, bindings.pixel ? &*bindings.pixel : nullptr);\n\tRebindBuffers(bindings.vertex);\n\tif (bindings.pixel) {\n\t\tRebindBuffers(*bindings.pixel);\n\t}\n\tRebindImages(bindings.vertex);\n\tif (bindings.pixel) {\n\t\tRebindImages(*bindings.pixel);\n\t}\n\treturn bindings;\n}'''
-          new = '''RenderExecutor::GraphicsBindings\nRenderExecutor::PrepareGraphicsBindings(const ShaderStageRuntime& vertex,\n                                        const ShaderStageRuntime& pixel, bool pixel_active) {\n#if defined(KYTY_DS_BINDING_PROFILE)\n\tusing Clock = std::chrono::steady_clock;\n\tstatic std::atomic<uint64_t> calls {0}, prepare_ns {0}, find_ns {0}, bda_ns {0},\n\t                             buffers_ns {0}, images_ns {0};\n\tconst auto t0 = Clock::now();\n#endif\n\tGraphicsBindings bindings {\n\t    .vertex = PrepareBindings(vertex),\n\t};\n\tif (pixel_active) {\n\t\tbindings.pixel.emplace(PrepareBindings(pixel));\n\t}\n#if defined(KYTY_DS_BINDING_PROFILE)\n\tconst auto t1 = Clock::now();\n#endif\n\tFindBuffers(bindings.vertex);\n\tif (bindings.pixel) {\n\t\tFindBuffers(*bindings.pixel);\n\t}\n#if defined(KYTY_DS_BINDING_PROFILE)\n\tconst auto t2 = Clock::now();\n#endif\n\tPrepareBdaBindings(bindings.vertex, bindings.pixel ? &*bindings.pixel : nullptr);\n#if defined(KYTY_DS_BINDING_PROFILE)\n\tconst auto t3 = Clock::now();\n#endif\n\tRebindBuffers(bindings.vertex);\n\tif (bindings.pixel) {\n\t\tRebindBuffers(*bindings.pixel);\n\t}\n#if defined(KYTY_DS_BINDING_PROFILE)\n\tconst auto t4 = Clock::now();\n#endif\n\tRebindImages(bindings.vertex);\n\tif (bindings.pixel) {\n\t\tRebindImages(*bindings.pixel);\n\t}\n#if defined(KYTY_DS_BINDING_PROFILE)\n\tconst auto t5 = Clock::now();\n\tconst auto ns = [](auto a, auto b) {\n\t\treturn static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(b - a).count());\n\t};\n\tprepare_ns.fetch_add(ns(t0, t1), std::memory_order_relaxed);\n\tfind_ns.fetch_add(ns(t1, t2), std::memory_order_relaxed);\n\tbda_ns.fetch_add(ns(t2, t3), std::memory_order_relaxed);\n\tbuffers_ns.fetch_add(ns(t3, t4), std::memory_order_relaxed);\n\timages_ns.fetch_add(ns(t4, t5), std::memory_order_relaxed);\n\tconst auto n = calls.fetch_add(1, std::memory_order_relaxed) + 1;\n\tif ((n & 255u) == 0) {\n\t\tstd::printf("DS_BIND_PROFILE calls=%llu prepare_ms=%.3f find_ms=%.3f bda_ms=%.3f buffers_ms=%.3f images_ms=%.3f\\n",\n\t\t            static_cast<unsigned long long>(n), prepare_ns.exchange(0) / 1000000.0,\n\t\t            find_ns.exchange(0) / 1000000.0, bda_ns.exchange(0) / 1000000.0,\n\t\t            buffers_ns.exchange(0) / 1000000.0, images_ns.exchange(0) / 1000000.0);\n\t}\n#endif\n\treturn bindings;\n}'''
-          if old not in s: raise SystemExit('PrepareGraphicsBindings profiler anchor not found')
+          old = '''BufferId BufferCache::FindBuffer(uint64_t vaddr, uint64_t size) {\n\tif (vaddr == 0) {\n\t\treturn NULL_BUFFER_ID;\n\t}\n\tif (!GuestRange {vaddr, size}.Valid()) {\n\t\tEXIT("BufferCache: invalid buffer discovery request\\n");\n\t}\n\tconst auto* owner = m_page_table.Find(vaddr >> PageTable::kPageBits);\n\tif (owner != nullptr && *owner) {\n\t\tauto& buffer = m_slot_buffers[*owner];\n\t\tif (buffer.IsInBounds(vaddr, size)) {\n\t\t\treturn *owner;\n\t\t}\n\t}\n\treturn CreateBuffer(vaddr, size);\n}'''
+          new = '''BufferId BufferCache::FindBuffer(uint64_t vaddr, uint64_t size) {\n\tif (vaddr == 0) { return NULL_BUFFER_ID; }\n\tif (!GuestRange {vaddr, size}.Valid()) { EXIT("BufferCache: invalid buffer discovery request\\n"); }\n#if defined(KYTY_DS_FINDBUFFER_PROFILE)\n\tusing Clock = std::chrono::steady_clock;\n\tstatic std::atomic<uint64_t> calls {0}, hits {0}, misses {0}, lookup_ns {0}, create_ns {0}, worst_create_ns {0};\n\tconst auto t0 = Clock::now();\n#endif\n\tconst auto* owner = m_page_table.Find(vaddr >> PageTable::kPageBits);\n\tif (owner != nullptr && *owner) {\n\t\tauto& buffer = m_slot_buffers[*owner];\n\t\tif (buffer.IsInBounds(vaddr, size)) {\n#if defined(KYTY_DS_FINDBUFFER_PROFILE)\n\t\t\tconst auto t1 = Clock::now();\n\t\t\tlookup_ns.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count()), std::memory_order_relaxed);\n\t\t\thits.fetch_add(1, std::memory_order_relaxed);\n\t\t\tconst auto n = calls.fetch_add(1, std::memory_order_relaxed) + 1;\n\t\t\tif ((n & 4095u) == 0) std::printf("DS_FINDBUFFER calls=%llu hits=%llu misses=%llu lookup_ms=%.3f create_ms=%.3f worst_create_ms=%.3f\\n", static_cast<unsigned long long>(n), static_cast<unsigned long long>(hits.exchange(0)), static_cast<unsigned long long>(misses.exchange(0)), lookup_ns.exchange(0)/1000000.0, create_ns.exchange(0)/1000000.0, worst_create_ns.exchange(0)/1000000.0);\n#endif\n\t\t\treturn *owner;\n\t\t}\n\t}\n#if defined(KYTY_DS_FINDBUFFER_PROFILE)\n\tconst auto t1 = Clock::now();\n\tlookup_ns.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count()), std::memory_order_relaxed);\n\tconst auto tc0 = Clock::now();\n#endif\n\tconst auto id = CreateBuffer(vaddr, size);\n#if defined(KYTY_DS_FINDBUFFER_PROFILE)\n\tconst auto tc1 = Clock::now();\n\tconst auto cns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(tc1-tc0).count());\n\tcreate_ns.fetch_add(cns, std::memory_order_relaxed);\n\tmisses.fetch_add(1, std::memory_order_relaxed);\n\tauto worst = worst_create_ns.load(std::memory_order_relaxed);\n\twhile (cns > worst && !worst_create_ns.compare_exchange_weak(worst, cns, std::memory_order_relaxed)) {}\n\tif (cns >= 1000000ull) std::printf("DS_FINDBUFFER_STALL create_ms=%.3f addr=0x%016llx size=0x%llx\\n", cns/1000000.0, static_cast<unsigned long long>(vaddr), static_cast<unsigned long long>(size));\n\tconst auto n = calls.fetch_add(1, std::memory_order_relaxed) + 1;\n\tif ((n & 4095u) == 0) std::printf("DS_FINDBUFFER calls=%llu hits=%llu misses=%llu lookup_ms=%.3f create_ms=%.3f worst_create_ms=%.3f\\n", static_cast<unsigned long long>(n), static_cast<unsigned long long>(hits.exchange(0)), static_cast<unsigned long long>(misses.exchange(0)), lookup_ns.exchange(0)/1000000.0, create_ns.exchange(0)/1000000.0, worst_create_ns.exchange(0)/1000000.0);\n#endif\n\treturn id;\n}'''
+          if old not in s: raise SystemExit('FindBuffer anchor not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
           '@ | python -
-          git diff -- src/graphics/host_gpu/renderer/renderDraw.cpp src/graphics/host_gpu/renderer/pipeline/descriptors.cpp
+          git diff -- src/graphics/host_gpu/renderer/renderDraw.cpp src/graphics/host_gpu/renderer/cache/bufferCache.cpp
 
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -101,34 +99,23 @@ jobs:
           target: desktop
           arch: win64_msvc2022_64
           cache: true
-      - name: Configure Release LTO binding profiling build
+      - name: Configure Release LTO deep profiler
         shell: cmd
         run: |
-          cmake -S . -B _Build/windows ^
-            -G Ninja ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON ^
-            -DCMAKE_C_COMPILER=clang-cl ^
-            -DCMAKE_CXX_COMPILER=clang-cl ^
-            -DCMAKE_C_FLAGS="/DNOMINMAX" ^
-            -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_BINDING_PROFILE=1" ^
-            -DKYTY_BUILD_ORIGIN=Fork ^
-            -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 ^
-            -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-BIND-PROFILE-LTO ^
-            -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
+          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_FINDBUFFER_PROFILE=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-FINDBUFFER-PROFILE-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
       - name: Build
         shell: cmd
         run: |
-          cmake --build _Build/windows --target launcher --parallel > pr599-pr506-bind-profile-build.log 2>&1
+          cmake --build _Build/windows --target launcher --parallel > findbuffer-profile-build.log 2>&1
           set "rc=%ERRORLEVEL%"
-          type pr599-pr506-bind-profile-build.log
+          type findbuffer-profile-build.log
           exit /b %rc%
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: PR599-PR506-Binding-Profile-Windows-build-log
-          path: pr599-pr506-bind-profile-build.log
+          name: FindBuffer-Profile-Windows-build-log
+          path: findbuffer-profile-build.log
           if-no-files-found: warn
           retention-days: 7
       - name: Install
@@ -137,6 +124,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-PR599-PR506-DS-BIND-PROFILE-LTO
+          name: KytyPS5-Windows-x64-PR599-PR506-DS-FINDBUFFER-PROFILE-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
