@@ -1,4 +1,4 @@
-name: Demon Souls Build33 Texture Flicker Synchronization Build
+name: Demon Souls Build34 DCC Texture Flicker Build
 
 on:
   push:
@@ -18,6 +18,7 @@ jobs:
           ref: fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7
           submodules: recursive
           fetch-depth: 0
+
       - name: Apply PR506 FPS optimizations
         shell: pwsh
         run: |
@@ -31,15 +32,18 @@ jobs:
           $unmerged = git diff --name-only --diff-filter=U
           if ($unmerged) { Write-Error "Unresolved merge conflicts remain: $unmerged"; exit 1 }
           $global:LASTEXITCODE = 0
-      - name: Apply Build32 keeper plus texture flicker synchronization
+
+      - name: Apply Build32 keeper and B34 DCC flicker isolation
         shell: pwsh
         run: |
           @'
           from pathlib import Path
+
+          # Keep the known-good Build32 rendering/performance changes.
           draw = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
           s = draw.read_text(encoding='utf-8')
           needle = '\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
-          replacement = '\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n// Build32 keeper: preserve all depth/shadow producer passes for visual correctness.\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) {\n\t\tconst auto& extent = state.color_info[0].desc.info.extent;\n\t\tconst bool likely_small_postfx = extent.width >= 64 && extent.height >= 64 && extent.width <= 1024 && extent.height <= 1024;\n\t\tif (likely_small_postfx) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
+          replacement = '\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n// Build32 keeper: preserve depth/shadow producer passes.\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) {\n\t\tconst auto& extent = state.color_info[0].desc.info.extent;\n\t\tconst bool likely_small_postfx = extent.width >= 64 && extent.height >= 64 && extent.width <= 1024 && extent.height <= 1024;\n\t\tif (likely_small_postfx) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
           if needle not in s: raise SystemExit('render anchor not found')
           draw.write_text(s.replace(needle, replacement, 1), encoding='utf-8')
 
@@ -50,21 +54,18 @@ jobs:
           if old not in s: raise SystemExit('VMA anchor not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
 
-          # Texture flicker fix: Image::GetBarriers did not classify attachment writes as writes.
-          # If an RT/depth image remained in General with the same broad access mask, a later
-          # texture read could avoid a required write->read dependency. Include attachment writes
-          # in repeated-write detection so producer/consumer transitions emit a barrier.
-          p = Path('src/graphics/host_gpu/renderer/image/image.cpp')
+          # B34: B33's broad attachment-write synchronization did not change the flicker and
+          # may have reduced FPS, so do not carry it forward. Instead isolate DCC metadata.
+          # Demon Souls render targets can be DCC-compressed and later rebound as textures;
+          # stale/mismatched DCC metadata can present as alternating/flickering texture contents.
+          p = Path('src/graphics/host_gpu/renderer/colorRenderTarget.cpp')
           s = p.read_text(encoding='utf-8')
-          old1 = 'constexpr auto write_access = vk::AccessFlagBits2::eTransferWrite |\n\t\t\t\t                              vk::AccessFlagBits2::eShaderWrite |\n\t\t\t\t                              vk::AccessFlagBits2::eMemoryWrite;'
-          new1 = 'constexpr auto write_access = vk::AccessFlagBits2::eTransferWrite |\n\t\t\t\t                              vk::AccessFlagBits2::eShaderWrite |\n\t\t\t\t                              vk::AccessFlagBits2::eColorAttachmentWrite |\n\t\t\t\t                              vk::AccessFlagBits2::eDepthStencilAttachmentWrite |\n\t\t\t\t                              vk::AccessFlagBits2::eMemoryWrite;'
-          if old1 not in s: raise SystemExit('subresource write-access anchor not found')
-          s = s.replace(old1, new1, 1)
-          old2 = 'constexpr auto write_access   = vk::AccessFlagBits2::eTransferWrite |\n\t\t                                vk::AccessFlagBits2::eShaderWrite |\n\t\t                                vk::AccessFlagBits2::eMemoryWrite;'
-          new2 = 'constexpr auto write_access   = vk::AccessFlagBits2::eTransferWrite |\n\t\t                                vk::AccessFlagBits2::eShaderWrite |\n\t\t                                vk::AccessFlagBits2::eColorAttachmentWrite |\n\t\t                                vk::AccessFlagBits2::eDepthStencilAttachmentWrite |\n\t\t                                vk::AccessFlagBits2::eMemoryWrite;'
-          if old2 not in s: raise SystemExit('whole-image write-access anchor not found')
-          p.write_text(s.replace(old2, new2, 1), encoding='utf-8')
+          old = 'const bool has_dcc        = rt.info.dcc_compression_enable && rt.dcc_addr.addr != 0;'
+          new = '#if defined(KYTY_DS_DISABLE_RT_DCC)\n\tconst bool has_dcc        = false;\n#else\n\tconst bool has_dcc        = rt.info.dcc_compression_enable && rt.dcc_addr.addr != 0;\n#endif'
+          if old not in s: raise SystemExit('DCC anchor not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
           '@ | python -
+
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
       - name: Setup Ninja
@@ -97,23 +98,24 @@ jobs:
           target: desktop
           arch: win64_msvc2022_64
           cache: true
-      - name: Configure Release LTO Build33 texture flicker fix
+
+      - name: Configure Release LTO Build34 DCC flicker isolation
         shell: cmd
         run: |
-          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-B33-TEXTURE-FLICKER-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
+          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1 /DKYTY_DS_DISABLE_RT_DCC=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-B34-DCC-FLICKER-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
       - name: Build
         shell: cmd
         run: |
-          cmake --build _Build/windows --target launcher --parallel > b33-texture-flicker-build.log 2>&1
+          cmake --build _Build/windows --target launcher --parallel > b34-dcc-flicker-build.log 2>&1
           set "rc=%ERRORLEVEL%"
-          type b33-texture-flicker-build.log
+          type b34-dcc-flicker-build.log
           exit /b %rc%
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: B33-Texture-Flicker-Windows-build-log
-          path: b33-texture-flicker-build.log
+          name: B34-DCC-Flicker-Windows-build-log
+          path: b34-dcc-flicker-build.log
           if-no-files-found: warn
           retention-days: 7
       - name: Install
@@ -122,6 +124,7 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-B33-TEXTURE-FLICKER-LTO
+          name: KytyPS5-Windows-x64-B34-DCC-FLICKER-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
+          retention-days: 90
