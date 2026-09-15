@@ -53,7 +53,9 @@ jobs:
             'src/graphics/host_gpu/renderer/cache/gpuResourceManager.h'
           )
           foreach ($path in $pr562Wins) { git checkout FETCH_HEAD -- $path; git add -- $path }
-          git checkout a6ebfb5208b61852b4e3f34c03bda677f2861533 -- src/graphics/guest_gpu/command_processor/commandProcessor.h
+          # Keep the frozen PR599 CommandProcessor API. PR599 graphicsRun/pm4Handlers use newer
+          # compute-chain, indirect-address, and draw-run methods that PR506's older header lacks.
+          git checkout fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7 -- src/graphics/guest_gpu/command_processor/commandProcessor.h
           git add -A
           $unmerged = git diff --name-only --diff-filter=U
           if ($unmerged) { Write-Error "Unresolved PR562 merge conflicts remain: $unmerged"; exit 1 }
@@ -61,43 +63,6 @@ jobs:
           if ($LASTEXITCODE -eq 0) { Write-Error "Unresolved merge markers remain"; exit 1 }
           if ($LASTEXITCODE -ne 1) { Write-Error "git grep conflict-marker check failed with exit code $LASTEXITCODE"; exit 1 }
           $global:LASTEXITCODE = 0
-
-      - name: Restore PR599 compatibility APIs
-        shell: pwsh
-        run: |
-          git show fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7:src/graphics/host_gpu/renderer/cache/bufferCache.cpp | Out-File -Encoding utf8 _pr599_bufferCache.cpp
-          @'
-          from pathlib import Path
-          h = Path('src/graphics/host_gpu/renderer/cache/bufferCache.h')
-          s = h.read_text(encoding='utf-8')
-          anchor = '\t[[nodiscard]] Buffer* GetFaultBuffer() noexcept { return m_fault_manager.GetFaultBuffer(); }\n'
-          if 'void ReportLodStats(' not in s:
-              if anchor not in s: raise SystemExit('BufferCache LOD declaration anchor not found')
-              s = s.replace(anchor, anchor + '\tvoid ReportLodStats(void* dst, uint32_t size, bool reset);\n', 1)
-              h.write_text(s, encoding='utf-8')
-
-          cpp = Path('src/graphics/host_gpu/renderer/cache/bufferCache.cpp')
-          s = cpp.read_text(encoding='utf-8')
-          if 'void BufferCache::ReportLodStats(' not in s:
-              ref = Path('_pr599_bufferCache.cpp').read_text(encoding='utf-8-sig')
-              begin = ref.index('void BufferCache::ReportLodStats(')
-              end = ref.index('BufferCache::BufferCache(', begin)
-              impl = ref[begin:end]
-              anchor = 'BufferCache::BufferCache('
-              if anchor not in s: raise SystemExit('BufferCache constructor anchor not found')
-              s = s.replace(anchor, impl + anchor, 1)
-              cpp.write_text(s, encoding='utf-8')
-
-          cp = Path('src/graphics/guest_gpu/command_processor/commandProcessor.h')
-          s = cp.read_text(encoding='utf-8')
-          if 'void ReportLodStats(' not in s:
-              anchor = '\tvoid WriteReferenceClock(uint64_t dst_address, uint32_t num_bytes);\n'
-              if anchor not in s: raise SystemExit('CommandProcessor LOD anchor not found')
-              wrapper = '\tvoid ReportLodStats(void* dst, uint32_t size, bool reset) { GetGpuResources().GetBufferCache().ReportLodStats(dst, size, reset); }\n'
-              s = s.replace(anchor, anchor + wrapper, 1)
-              cp.write_text(s, encoding='utf-8')
-          '@ | python -
-          Remove-Item _pr599_bufferCache.cpp
 
       - name: Apply frozen Build 13 performance patches
         shell: pwsh
