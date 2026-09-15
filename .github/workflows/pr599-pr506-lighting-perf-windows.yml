@@ -1,4 +1,4 @@
-name: Demon Souls Build36 Texture View Mip Flicker Fix Build
+name: Demon Souls Build37 GPU Alias Ownership Flicker Fix Build
 
 on:
   push:
@@ -33,14 +33,14 @@ jobs:
           if ($unmerged) { Write-Error "Unresolved merge conflicts remain: $unmerged"; exit 1 }
           $global:LASTEXITCODE = 0
 
-      - name: Apply Build32 keeper and B36 texture view fix
+      - name: Apply Build32 keeper and B37 GPU alias ownership fix
         shell: pwsh
         run: |
           @'
           from pathlib import Path
 
-          # Preserve Build32 keeper/performance changes only. B33/B34/B35 flicker experiments
-          # were negative and are intentionally not carried forward.
+          # Preserve Build32 keeper/performance changes. B33-B36 flicker experiments were
+          # negative and are intentionally not carried forward.
           draw = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
           s = draw.read_text(encoding='utf-8')
           needle = '\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
@@ -55,17 +55,16 @@ jobs:
           if old not in s: raise SystemExit('VMA anchor not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
 
-          # B36: ResolveOverlap returns a mip/layer offset when a requested guest subresource is
-          # found inside an existing image. FindImage currently overwrites the descriptor's
-          # requested base mip/layer with that offset. If the descriptor already selects a mip or
-          # array layer, this can point the Vulkan view at the wrong subresource. Compose the
-          # overlap offset with the requested view instead. This directly targets frame-to-frame
-          # wrong-mip/wrong-layer texture views without adding synchronization overhead.
+          # B37: a render/depth/storage write makes one native Vulkan image authoritative for its
+          # guest-memory range, but CommitGpuWrite only marks that image GPU-modified. Any other
+          # cached image overlapping the same guest bytes can remain GPU-modified/native-current
+          # and later win rediscovery, exposing stale contents as a sampled texture. Demote those
+          # overlapping aliases to buffer-modified ownership when a new GPU writer is committed.
           p = Path('src/graphics/host_gpu/renderer/cache/textureCache.cpp')
           s = p.read_text(encoding='utf-8')
-          old = '''\t\tif (view_mip >= 0) {\n\t\t\tdesc.view_info.base_level = static_cast<uint32_t>(view_mip);\n\t\t}\n\t\tif (view_layer >= 0) {\n\t\t\tdesc.view_info.base_layer = static_cast<uint32_t>(view_layer);\n\t\t}'''
-          new = '''\t\tif (view_mip >= 0) {\n#if defined(KYTY_DS_COMPOSE_VIEW_OFFSETS)\n\t\t\tdesc.view_info.base_level += static_cast<uint32_t>(view_mip);\n#else\n\t\t\tdesc.view_info.base_level = static_cast<uint32_t>(view_mip);\n#endif\n\t\t}\n\t\tif (view_layer >= 0) {\n#if defined(KYTY_DS_COMPOSE_VIEW_OFFSETS)\n\t\t\tdesc.view_info.base_layer += static_cast<uint32_t>(view_layer);\n#else\n\t\t\tdesc.view_info.base_layer = static_cast<uint32_t>(view_layer);\n#endif\n\t\t}'''
-          if old not in s: raise SystemExit('view offset anchor not found')
+          old = '''void TextureCache::CommitGpuWrite(Image& image) {\n\tif (image.depth_id || image.backing.image == nullptr) {\n\t\tEXIT("TextureCache: stencil association cannot own image contents\\n");\n\t}\n\timage.ClearBufferModified();\n\tif (image.IsCpuDirty()) {\n\t\timage.RefreshComplete();\n\t}\n\timage.MarkGpuModified();\n}'''
+          new = '''void TextureCache::CommitGpuWrite(Image& image) {\n\tif (image.depth_id || image.backing.image == nullptr) {\n\t\tEXIT("TextureCache: stencil association cannot own image contents\\n");\n\t}\n#if defined(KYTY_DS_SINGLE_GPU_ALIAS_OWNER)\n\tif (!image.info.data.Empty()) {\n\t\tfor (const auto alias_id: FindImagesInRegion(image.info.data.address, image.info.data.size, false)) {\n\t\t\tauto* alias = m_slot_images.try_get(alias_id);\n\t\t\tif (alias == nullptr || alias == &image || alias->depth_id ||\n\t\t\t    !alias->Overlaps(image.info.data.address, image.info.data.size)) {\n\t\t\t\tcontinue;\n\t\t\t}\n\t\t\tif (alias->IsGpuModified()) {\n\t\t\t\talias->ClearGpuModified();\n\t\t\t}\n\t\t\talias->MarkBufferModified();\n\t\t}\n\t}\n#endif\n\timage.ClearBufferModified();\n\tif (image.IsCpuDirty()) {\n\t\timage.RefreshComplete();\n\t}\n\timage.MarkGpuModified();\n}'''
+          if old not in s: raise SystemExit('CommitGpuWrite anchor not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
           '@ | python -
 
@@ -102,23 +101,23 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
 
-      - name: Configure Release LTO Build36 texture view fix
+      - name: Configure Release LTO Build37 GPU alias ownership fix
         shell: cmd
         run: |
-          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1 /DKYTY_DS_COMPOSE_VIEW_OFFSETS=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-B36-TEXTURE-VIEW-FLICKER-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
+          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1 /DKYTY_DS_SINGLE_GPU_ALIAS_OWNER=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-B37-GPU-ALIAS-FLICKER-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
       - name: Build
         shell: cmd
         run: |
-          cmake --build _Build/windows --target launcher --parallel > b36-texture-view-flicker-build.log 2>&1
+          cmake --build _Build/windows --target launcher --parallel > b37-gpu-alias-flicker-build.log 2>&1
           set "rc=%ERRORLEVEL%"
-          type b36-texture-view-flicker-build.log
+          type b37-gpu-alias-flicker-build.log
           exit /b %rc%
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: B36-Texture-View-Flicker-Windows-build-log
-          path: b36-texture-view-flicker-build.log
+          name: B37-GPU-Alias-Flicker-Windows-build-log
+          path: b37-gpu-alias-flicker-build.log
           if-no-files-found: warn
           retention-days: 7
       - name: Install
@@ -127,7 +126,7 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-B36-TEXTURE-VIEW-FLICKER-LTO
+          name: KytyPS5-Windows-x64-B37-GPU-ALIAS-FLICKER-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
           retention-days: 90
