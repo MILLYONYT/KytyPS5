@@ -51,27 +51,31 @@ jobs:
           h.write_text(s, encoding='utf-8')
           p = Path('src/graphics/guest_gpu/command_processor/pm4Handlers.cpp')
           s = p.read_text(encoding='utf-8')
-          s = s.replace('cp.ReportLodStats(dst, buffer_size, (buffer[3] & ((1u << 19) | (1u << 18))) != 0);','(void)dst; (void)buffer_size; // PR562 BDA experiment: LOD stats unavailable')
+          s = s.replace('cp.ReportLodStats(dst, buffer_size, (buffer[3] & ((1u << 19) | (1u << 18))) != 0);','(void)dst; (void)buffer_size; // PR562 BDA experiment: LOD stats accounting unavailable')
           p.write_text(s, encoding='utf-8')
           t = Path('src/graphics/host_gpu/renderer/cache/textureCache.cpp')
           s = t.read_text(encoding='utf-8')
           s2, n = re.subn(r'\nbool BufferCache::TryInvalidateCpuWriteWindow\(uint64_t fault, uint64_t begin, uint64_t size\) \{\n(?:.|\n)*?\n\}\n', '\n', s, count=1)
           if n != 1: raise SystemExit('stale TryInvalidateCpuWriteWindow wrapper not found exactly once')
           t.write_text(s2, encoding='utf-8')
+
           d = Path('src/graphics/host_gpu/renderer/pipeline/descriptors.cpp')
           s = d.read_text(encoding='utf-8')
           old = 'if (m_context.GetGpuResources().PrepareBdaReadRanges(first_ranges)) return;'
           if old not in s: raise SystemExit('PrepareBdaReadRanges callsite not found')
-          s = s.replace(old, '(void)first_ranges; // PR562 performs BDA upload discovery from CPU-dirty hints', 1)
-          s, n = re.subn(r'\s*const auto\* buffer = m_context\.GetBufferCache\(\)\.GetLodStatsBuffer\(\);', '\n                                                const Buffer* buffer = nullptr;', s, count=1)
-          if n != 1: raise SystemExit('GetLodStatsBuffer callsite not found')
+          s = s.replace(old, 'm_context.GetGpuResources().PrepareBda(); return; // PR562 selective dirty-hint sync', 1)
+          old_lod = 'const auto* buffer = m_context.GetBufferCache().GetLodStatsBuffer();'
+          if old_lod not in s: raise SystemExit('GetLodStatsBuffer callsite not found')
+          s = s.replace(old_lod, 'const auto* buffer = &m_context.GetBufferCache().GetUtilityBuffer(MemoryUsage::DeviceLocal);', 1)
           d.write_text(s, encoding='utf-8')
+
           r = Path('src/graphics/host_gpu/renderer/renderCompute.cpp')
           s = r.read_text(encoding='utf-8')
           old = 'm_context.GetBufferCache().EnsureBufferContents(indirect_args, 3u * sizeof(uint32_t));'
           if old not in s: raise SystemExit('EnsureBufferContents callsite not found')
-          s = s.replace(old, '(void)indirect_args; // PR562 cache path synchronizes dirty BDA buffers through its own preparation path', 1)
+          s = s.replace(old, 'm_context.GetBufferCache().SynchronizeBuffersInRange(indirect_args, 3u * sizeof(uint32_t));', 1)
           r.write_text(s, encoding='utf-8')
+
           rd = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
           s = rd.read_text(encoding='utf-8')
           if s.count('m_context.GetGpuResources().MappingEpoch()') != 2: raise SystemExit('unexpected MappingEpoch call count')
@@ -79,6 +83,7 @@ jobs:
           s = s.replace('m_context.GetGpuResources().MappingEpoch()', '0ull')
           s = s.replace('m_context.GetGpuResources().PreparationAliasEpoch()', '0ull')
           rd.write_text(s, encoding='utf-8')
+
           gh = Path('src/graphics/host_gpu/renderer/cache/gpuResourceManager.h')
           s = gh.read_text(encoding='utf-8')
           anchor = '\tvoid               PrepareBda();\n'
