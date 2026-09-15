@@ -1,4 +1,4 @@
-name: PR599 + PR506 Demon Souls VMA Suballocation Performance Build
+name: PR599 + PR506 Demon Souls VMA + Unmap Sync Performance Build
 
 on:
   push:
@@ -41,7 +41,7 @@ jobs:
           if ($LASTEXITCODE -ne 1) { Write-Error "git grep conflict-marker check failed with exit code $LASTEXITCODE"; exit 1 }
           $global:LASTEXITCODE = 0
 
-      - name: Apply 10-12-18 baseline and VMA suballocation optimization
+      - name: Apply frozen Build 13 baseline plus redundant-unmap sync optimization
         shell: pwsh
         run: |
           @'
@@ -56,11 +56,18 @@ jobs:
           p = Path('src/graphics/host_gpu/renderer/cache/streamBuffer.cpp')
           s = p.read_text(encoding='utf-8')
           old = '''\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n\tVmaAllocationCreateInfo allocation_info {};'''
-          new = '''\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n#if defined(KYTY_DS_VMA_SUBALLOC_PERF)\n\t// CreateBuffer profiling showed VMA/Vulkan allocation dominates the long stalls.\n\t// Do not force every BDA-capable game buffer into its own VkDeviceMemory allocation.\n\t// VMA can suballocate BDA buffers from reusable device-memory blocks while each Buffer\n\t// keeps the exact same guest CPU address, size, VkBuffer and device-address semantics.\n\t// Large resources retain dedicated allocation to bound fragmentation/regression risk.\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    (with_bda && size >= (4ull * 1024 * 1024)) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#else\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#endif\n\tVmaAllocationCreateInfo allocation_info {};'''
+          new = '''\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n#if defined(KYTY_DS_VMA_SUBALLOC_PERF)\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    (with_bda && size >= (4ull * 1024 * 1024)) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#else\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#endif\n\tVmaAllocationCreateInfo allocation_info {};'''
           if old not in s: raise SystemExit('VMA BDA allocation anchor not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
+
+          p = Path('src/graphics/host_gpu/renderer/cache/gpuResourceManager.cpp')
+          s = p.read_text(encoding='utf-8')
+          old = '''void GpuResourceManager::UnmapMemory(uint64_t vaddr, uint64_t size) {\n\tif (CommandScheduler::InDeferredOperation()) {'''
+          new = '''void GpuResourceManager::UnmapMemory(uint64_t vaddr, uint64_t size) {\n#if defined(KYTY_DS_UNMAP_SYNC_PERF)\n\t// Unmapping guest memory that was never mapped as a GPU resource cannot invalidate\n\t// either GPU cache. Avoid SendCommandSync + scheduler Finish in that common case.\n\t// This is the upstream PR483 fast path, applied on top of the frozen Build 13 baseline.\n\tif (!GuestRange {vaddr, size}.Valid()) {\n\t\treturn;\n\t}\n\t{\n\t\tstd::shared_lock lock(m_mapped_ranges_mutex);\n\t\tif (!m_mapped_ranges.Intersects(vaddr, size)) {\n\t\t\treturn;\n\t\t}\n\t}\n#endif\n\tif (CommandScheduler::InDeferredOperation()) {'''
+          if old not in s: raise SystemExit('UnmapMemory anchor not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
           '@ | python -
-          git diff -- src/graphics/host_gpu/renderer/renderDraw.cpp src/graphics/host_gpu/renderer/cache/streamBuffer.cpp
+          git diff -- src/graphics/host_gpu/renderer/renderDraw.cpp src/graphics/host_gpu/renderer/cache/streamBuffer.cpp src/graphics/host_gpu/renderer/cache/gpuResourceManager.cpp
 
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -94,23 +101,23 @@ jobs:
           target: desktop
           arch: win64_msvc2022_64
           cache: true
-      - name: Configure Release LTO VMA suballocation performance build
+      - name: Configure Release LTO VMA plus unmap-sync performance build
         shell: cmd
         run: |
-          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-VMA-SUBALLOC-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
+          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1 /DKYTY_DS_UNMAP_SYNC_PERF=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-VMA-UNMAP-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
       - name: Build
         shell: cmd
         run: |
-          cmake --build _Build/windows --target launcher --parallel > vma-suballoc-build.log 2>&1
+          cmake --build _Build/windows --target launcher --parallel > vma-unmap-build.log 2>&1
           set "rc=%ERRORLEVEL%"
-          type vma-suballoc-build.log
+          type vma-unmap-build.log
           exit /b %rc%
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: VMA-Suballoc-Windows-build-log
-          path: vma-suballoc-build.log
+          name: VMA-Unmap-Windows-build-log
+          path: vma-unmap-build.log
           if-no-files-found: warn
           retention-days: 7
       - name: Install
@@ -119,6 +126,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-PR599-PR506-DS-VMA-SUBALLOC-LTO
+          name: KytyPS5-Windows-x64-PR599-PR506-DS-VMA-UNMAP-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
