@@ -43,6 +43,15 @@ jobs:
         run: |
           git fetch https://github.com/MehmetCambaz/KytyPS5.git 02b57e8fdce98f590ef76a899ca9ac4885563737
           cmd /c "git cherry-pick --no-commit 02b57e8fdce98f590ef76a899ca9ac4885563737 || exit /b 0"
+          $pr562Wins = @(
+            'src/graphics/host_gpu/regionManager.h',
+            'src/graphics/host_gpu/renderer/cache/bufferCache.cpp',
+            'src/graphics/host_gpu/renderer/cache/bufferCache.h',
+            'src/graphics/host_gpu/renderer/cache/gpuResourceManager.cpp',
+            'src/graphics/host_gpu/renderer/cache/gpuResourceManager.h'
+          )
+          foreach ($path in $pr562Wins) { git checkout --theirs -- $path; git add -- $path }
+          git add -A
           $unmerged = git diff --name-only --diff-filter=U
           if ($unmerged) { Write-Error "Unresolved PR562 merge conflicts remain: $unmerged"; exit 1 }
           git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- src
