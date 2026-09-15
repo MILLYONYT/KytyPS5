@@ -1,4 +1,4 @@
-name: PR599 + PR506 Demon Souls Lighting-Off Performance Build
+name: PR599 + PR506 Demon Souls Selective Shadow Performance Build
 
 on:
   push:
@@ -25,10 +25,6 @@ jobs:
           git config user.name "MILLYONYT CI"
           git config user.email "actions@users.noreply.github.com"
           git fetch https://github.com/Techx3/KytyPS5.git a6ebfb5208b61852b4e3f34c03bda677f2861533
-
-          # PR506 overlaps four newer PR599 implementations. Cherry-pick is expected
-          # to report conflicts there, so allow that command to return non-zero and
-          # immediately resolve those paths in favor of the frozen PR599 baseline.
           cmd /c "git cherry-pick --no-commit a6ebfb5208b61852b4e3f34c03bda677f2861533 || exit /b 0"
 
           $pr599Wins = @(
@@ -53,7 +49,7 @@ jobs:
           }
           git status --short
 
-      - name: Apply Demon Souls lighting/shadow/reflection performance experiment
+      - name: Apply selective Demon Souls shadow performance experiment
         shell: pwsh
         run: |
           @'
@@ -64,7 +60,7 @@ jobs:
 
           needle = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
 
-          replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_DISABLE_EXPENSIVE_LIGHTING)\n\t// Demon's Souls performance experiment: skip likely off-screen shadow-map and\n\t// reflection-probe passes while keeping the main screen/depth path intact.\n\t// Main scene targets are typically non-square; shadow maps and cubemap/probe\n\t// faces are commonly square. This is intentionally aggressive and isolated to\n\t// this benchmark build so visual impact can be measured against FPS gain.\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_shadow_map = extent.width == extent.height && extent.width >= 256 &&\n\t\t                              extent.width <= 4096;\n\t\tif (likely_shadow_map) {\n\t\t\treturn false;\n\t\t}\n\t}\n\n\tif (!state.depth_info.image_id && state.color_count > 0 && state.color_count <= 6) {\n\t\tbool     all_square = true;\n\t\tuint32_t max_extent = 0;\n\t\tfor (uint32_t i = 0; i < state.color_count; ++i) {\n\t\t\tconst auto extent = state.color_info[i].Extent();\n\t\t\tall_square = all_square && extent.width == extent.height;\n\t\t\tmax_extent = std::max(max_extent, std::max(extent.width, extent.height));\n\t\t}\n\t\tconst bool likely_reflection_probe = all_square && max_extent >= 64 && max_extent <= 1024;\n\t\tif (likely_reflection_probe) {\n\t\t\treturn false;\n\t\t}\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
+          replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\t// Selective follow-up to the lighting-off experiment. Preserve reflection/probe\n\t// rendering and smaller shadow targets for visual quality. Skip only large,\n\t// square, depth-only off-screen targets, which are the strongest shadow-map\n\t// candidates and the most expensive subset observed by the prior experiment.\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 &&\n\t\t                                    extent.width <= 4096;\n\t\tif (likely_large_shadow_map) {\n\t\t\treturn false;\n\t\t}\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
 
           if needle not in s:
               raise SystemExit('renderDraw.cpp patch anchor not found')
@@ -114,7 +110,7 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
 
-      - name: Configure Release LTO lighting-off build
+      - name: Configure Release LTO selective-shadow build
         shell: cmd
         run: |
           cmake -S . -B _Build/windows ^
@@ -124,26 +120,26 @@ jobs:
             -DCMAKE_C_COMPILER=clang-cl ^
             -DCMAKE_CXX_COMPILER=clang-cl ^
             -DCMAKE_C_FLAGS="/DNOMINMAX" ^
-            -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_DISABLE_EXPENSIVE_LIGHTING=1" ^
+            -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1" ^
             -DKYTY_BUILD_ORIGIN=Fork ^
             -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 ^
-            -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-LIGHTING-OFF-LTO ^
+            -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-SELECTIVE-SHADOW-LTO ^
             -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
 
       - name: Build
         shell: cmd
         run: |
-          cmake --build _Build/windows --target launcher --parallel > pr599-pr506-lighting-build.log 2>&1
+          cmake --build _Build/windows --target launcher --parallel > pr599-pr506-selective-shadow-build.log 2>&1
           set "rc=%ERRORLEVEL%"
-          type pr599-pr506-lighting-build.log
+          type pr599-pr506-selective-shadow-build.log
           exit /b %rc%
 
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: PR599-PR506-Lighting-Off-Windows-build-log
-          path: pr599-pr506-lighting-build.log
+          name: PR599-PR506-Selective-Shadow-Windows-build-log
+          path: pr599-pr506-selective-shadow-build.log
           if-no-files-found: warn
           retention-days: 7
 
@@ -154,6 +150,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-PR599-PR506-DS-LIGHTING-OFF-LTO
+          name: KytyPS5-Windows-x64-PR599-PR506-DS-SELECTIVE-SHADOW-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
