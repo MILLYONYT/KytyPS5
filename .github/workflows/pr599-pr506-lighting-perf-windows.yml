@@ -36,7 +36,10 @@ jobs:
           git add -A
           $unmerged = git diff --name-only --diff-filter=U
           if ($unmerged) { Write-Error "Unresolved merge conflicts remain: $unmerged"; exit 1 }
-          if (git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- src) { Write-Error "Unresolved merge markers remain"; exit 1 }
+          git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- src
+          if ($LASTEXITCODE -eq 0) { Write-Error "Unresolved merge markers remain"; exit 1 }
+          if ($LASTEXITCODE -ne 1) { Write-Error "git grep conflict-marker check failed with exit code $LASTEXITCODE"; exit 1 }
+          $global:LASTEXITCODE = 0
 
       - name: Apply selective shadow baseline and aggregate profiling
         shell: pwsh
@@ -51,9 +54,6 @@ jobs:
           if needle not in s: raise SystemExit('selective shadow patch anchor not found')
           s = s.replace(needle, replacement, 1)
 
-          # Lightweight aggregate CPU-side draw profiling. We intentionally report only every
-          # 256 prepared draws to avoid per-draw logging overhead. The buckets isolate resource
-          # binding, vertex/index preparation, render-target acquisition, and pipeline creation.
           include_anchor = '#include <cstring>\n'
           if include_anchor not in s: raise SystemExit('include anchor not found')
           s = s.replace(include_anchor, include_anchor + '#include <chrono>\n', 1)
