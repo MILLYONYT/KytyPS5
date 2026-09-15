@@ -81,14 +81,11 @@ jobs:
           if n != 1: raise SystemExit('stale TryInvalidateCpuWriteWindow wrapper not found exactly once')
           t.write_text(s2, encoding='utf-8')
 
-          # PR599 callsites depend on helper APIs removed by PR562's coordinated cache implementation.
-          # Keep PR562's own dirty-hint BDA synchronization and remove only the stale PR599-only hooks.
           d = Path('src/graphics/host_gpu/renderer/pipeline/descriptors.cpp')
           s = d.read_text(encoding='utf-8')
           old = 'if (m_context.GetGpuResources().PrepareBdaReadRanges(first_ranges)) return;'
           if old not in s: raise SystemExit('PrepareBdaReadRanges callsite not found')
           s = s.replace(old, '(void)first_ranges; // PR562 performs BDA upload discovery from CPU-dirty hints', 1)
-          # LOD stats are diagnostic/accounting support from PR599 and not required by PR562 selective BDA.
           s, n = re.subn(r'\s*const auto\* buffer = m_context\.GetBufferCache\(\)\.GetLodStatsBuffer\(\);',
                          '\n                                                const Buffer* buffer = nullptr;', s, count=1)
           if n != 1: raise SystemExit('GetLodStatsBuffer callsite not found')
@@ -100,6 +97,17 @@ jobs:
           if old not in s: raise SystemExit('EnsureBufferContents callsite not found')
           s = s.replace(old, '(void)indirect_args; // PR562 cache path synchronizes dirty BDA buffers through its own preparation path', 1)
           r.write_text(s, encoding='utf-8')
+
+          # PR599 draw-run reuse records resource-manager epochs that PR562 predates.
+          # Neutralize only those epoch reads so the existing PR599 draw-run path remains buildable;
+          # PR562's own dirty tracking remains responsible for resource synchronization.
+          rd = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
+          s = rd.read_text(encoding='utf-8')
+          if s.count('m_context.GetGpuResources().MappingEpoch()') != 2: raise SystemExit('unexpected MappingEpoch call count')
+          if s.count('m_context.GetGpuResources().PreparationAliasEpoch()') != 2: raise SystemExit('unexpected PreparationAliasEpoch call count')
+          s = s.replace('m_context.GetGpuResources().MappingEpoch()', '0ull')
+          s = s.replace('m_context.GetGpuResources().PreparationAliasEpoch()', '0ull')
+          rd.write_text(s, encoding='utf-8')
           '@ | python -
           git add -A
           $unmerged = git diff --name-only --diff-filter=U
