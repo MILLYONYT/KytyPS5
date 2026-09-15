@@ -1,0 +1,79 @@
+name: Demon Souls Build45 Verified Runtime Diagnostic Build
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths: ['.github/workflows/b45-diagnostic.yml']
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: chenxiao07/KytyPS5
+          ref: fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7
+          submodules: recursive
+      - name: Apply PR506 and B45 diagnostics
+        shell: pwsh
+        run: |
+          git config user.name "MILLYONYT CI"
+          git config user.email "actions@users.noreply.github.com"
+          git fetch https://github.com/Techx3/KytyPS5.git a6ebfb5208b61852b4e3f34c03bda677f2861533
+          cmd /c "git cherry-pick --no-commit a6ebfb5208b61852b4e3f34c03bda677f2861533 || exit /b 0"
+          $keep=@('src/graphics/host_gpu/renderer/pipeline/pipelineCache.cpp','src/graphics/host_gpu/renderer/renderCompute.cpp','src/graphics/shader/recompiler/ir/passes/ResourceMaterialization.cpp','src/graphics/shader/recompiler/ir/passes/SrtWalker.h'); foreach($p in $keep){git restore --source=HEAD --staged --worktree -- $p}; git add -A
+          @'
+          from pathlib import Path
+          d=Path('src/graphics/host_gpu/renderer/renderDraw.cpp'); s=d.read_text()
+          s=s.replace('#include <atomic>','#include <atomic>\n#include <cstdio>',1)
+          a='\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
+          b='\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) { const auto& e=state.color_info[0].desc.info.extent; if(e.width>=64 && e.height>=64 && e.width<=1024 && e.height<=1024) return false; }\n#endif\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
+          if a not in s: raise SystemExit('draw keeper anchor missing')
+          s=s.replace(a,b,1)
+          a='\tauto bindings = PrepareGraphicsBindings(state.vs_input_info.stage, state.ps_input_info.stage,\n\t                                        state.ps_active);'
+          b=a+'\n#if defined(KYTY_DS_B45_TRACE)\n\t{ static std::FILE* f=std::fopen("kyty-b45-diag.log","a"); static std::atomic<unsigned long long> n{0}; if(f){ auto id=n.fetch_add(1); auto fr=(unsigned long long)m_context.GetGpu().GetFrameNum(); auto vs=(unsigned long long)state.vs_input_info.stage.program->shader_hash; auto ps=state.ps_active?(unsigned long long)state.ps_input_info.stage.program->shader_hash:0ull; std::fprintf(f,"B45 DRAW frame=%llu id=%llu vs=%016llx ps=%016llx rt=%u idx=%u inst=%u\\n",fr,id,vs,ps,state.color_count?state.color_info[0].desc.info.extent.width:0,draw.index_count,draw.instance_count); if((id&127)==0) std::fflush(f); } }\n#endif'
+          if a not in s: raise SystemExit('draw trace anchor missing')
+          d.write_text(s.replace(a,b,1))
+          c=Path('src/graphics/host_gpu/renderer/renderCompute.cpp'); s=c.read_text(); s=s.replace('#include <cstring>','#include <cstring>\n#include <cstdio>',1)
+          a='\tconst auto& program   = *input_info.stage.program;\n\tconst auto& resources = input_info.stage.resources;'
+          b=a+'\n#if defined(KYTY_DS_B45_TRACE)\n\t{ static std::FILE* f=std::fopen("kyty-b45-diag.log","a"); static std::atomic<unsigned long long> n{0}; if(f){ auto id=n.fetch_add(1); auto fr=(unsigned long long)m_context.GetGpu().GetFrameNum(); std::fprintf(f,"B45 COMP frame=%llu id=%llu cs=%016llx groups=%ux%ux%u local=%ux%ux%u images=%zu buffers=%zu\\n",fr,id,(unsigned long long)program.shader_hash,thread_group_x,thread_group_y,thread_group_z,input_info.threads_num[0],input_info.threads_num[1],input_info.threads_num[2],program.info.images.size(),program.info.buffers.size()); if((id&63)==0) std::fflush(f); } }\n#endif'
+          if a not in s: raise SystemExit('compute trace anchor missing')
+          c.write_text(s.replace(a,b,1))
+          p=Path('src/graphics/host_gpu/renderer/cache/streamBuffer.cpp'); s=p.read_text()
+          a='\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;'
+          b='#if defined(KYTY_DS_VMA_SUBALLOC_PERF)\n\tconst VmaAllocationCreateFlags bda_flag = (with_bda && size >= (16ull * 1024 * 1024)) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#else\n'+a+'\n#endif'
+          if a not in s: raise SystemExit('VMA anchor missing')
+          p.write_text(s.replace(a,b,1))
+          '@ | python -
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - name: Locate and install glslang
+        shell: pwsh
+        run: |
+          $r=Split-Path (Get-Command vcpkg).Source; vcpkg install glslang[tools,opt]:x64-windows; "$r\installed\x64-windows\tools\glslang"|Out-File $env:GITHUB_PATH -Append
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.10.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+      - name: Configure
+        shell: cmd
+        run: cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1 /DKYTY_DS_B45_TRACE=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-B45-VERIFIED-DIAGNOSTIC-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
+      - name: Build
+        shell: cmd
+        run: cmake --build _Build/windows --target launcher --parallel > b45-build.log 2>&1 && type b45-build.log
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: B45-build-log
+          path: b45-build.log
+      - name: Install
+        shell: cmd
+        run: cmake --install _Build/windows --prefix _Build/windows/install
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KytyPS5-Windows-x64-B45-VERIFIED-DIAGNOSTIC-LTO
+          path: _Build/windows/install/**
+          retention-days: 90
