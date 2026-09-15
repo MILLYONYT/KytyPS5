@@ -1,4 +1,4 @@
-name: Demon Souls Build42 Attachment Feedback Flicker Fix Build
+name: Demon Souls Build43 Pixel Image Write Flicker Fix Build
 
 on:
   push:
@@ -33,13 +33,13 @@ jobs:
           if ($unmerged) { Write-Error "Unresolved merge conflicts remain: $unmerged"; exit 1 }
           $global:LASTEXITCODE = 0
 
-      - name: Apply Build32 keeper and B42 attachment feedback ordering fix
+      - name: Apply Build32 keeper and B43 pixel image-write synchronization
         shell: pwsh
         run: |
           @'
           from pathlib import Path
 
-          # Return to Build32 + PR506/VMA keeper. B33-B41 experiments are excluded.
+          # Return to Build32 + PR506/VMA keeper. B33-B42 experiments are excluded.
           draw = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
           s = draw.read_text(encoding='utf-8')
           needle = '\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
@@ -47,15 +47,15 @@ jobs:
           if needle not in s: raise SystemExit('render anchor not found')
           s = s.replace(needle, replacement, 1)
 
-          # B42: when a color attachment is also sampled by the pixel shader, the baseline switches
-          # it to GENERAL but does not explicitly mark that color attachment as a feedback loop.
-          # Depth has dedicated feedback-loop handling; color only inherits is_bound/GENERAL.
-          # Force the render pass boundary before such a draw so prior-frame/history writes are
-          # complete before the sampled descriptor is consumed. This is deliberately scoped to
-          # actual same-image color feedback and avoids global texture barriers/cache invalidation.
-          old = '''\tconst auto rendering =\n\t    AcquireRenderTargets(buffer, state.color_info, state.color_count, state.depth_info,\n\t                         bindings.pixel);'''
-          new = '''#if defined(KYTY_DS_COLOR_FEEDBACK_BOUNDARY)\n\tif (bindings.pixel) {\n\t\tbool color_feedback = false;\n\t\tfor (const auto& sampled: bindings.pixel->images) {\n\t\t\tif (sampled.desc.type != TextureCache::BindingType::Texture) continue;\n\t\t\tfor (uint32_t i = 0; i < state.color_count; ++i) {\n\t\t\t\tif (sampled.image_id == state.color_info[i].image_id) {\n\t\t\t\t\tcolor_feedback = true;\n\t\t\t\t\tbreak;\n\t\t\t\t}\n\t\t\t}\n\t\t\tif (color_feedback) break;\n\t\t}\n\t\tif (color_feedback) {\n\t\t\tm_context.GetCommandScheduler().EndRendering();\n\t\t}\n\t}\n#endif\n\tconst auto rendering =\n\t    AcquireRenderTargets(buffer, state.color_info, state.color_count, state.depth_info,\n\t                         bindings.pixel);'''
-          if old not in s: raise SystemExit('render acquisition anchor not found')
+          # B43: ExecutePreparedDraw only emits ShaderWriteBarrier when HasShaderBufferWrites()
+          # reports a written BUFFER. Pixel/vertex storage-image writes are omitted from that test.
+          # Demon Souls sky/atmospheric passes can therefore write an image and a following pass can
+          # sample it without the explicit shader-write dependency used for buffers. Detect actual
+          # nonempty storage-image bindings in the already prepared descriptor set and include them
+          # in the existing narrow post-draw barrier decision.
+          old = '''\tvk::PipelineStageFlags shader_write_stages = {};\n\tif (HasShaderBufferWrites(state.vs_input_info.stage)) {\n\t\tshader_write_stages |= mesh_active ? vk::PipelineStageFlagBits::eMeshShaderEXT\n\t\t                                   : vk::PipelineStageFlagBits::eVertexShader;\n\t}\n\tif (state.ps_active && HasShaderBufferWrites(state.ps_input_info.stage)) {\n\t\tshader_write_stages |= vk::PipelineStageFlagBits::eFragmentShader;\n\t}'''
+          new = '''\tvk::PipelineStageFlags shader_write_stages = {};\n\tif (HasShaderBufferWrites(state.vs_input_info.stage)) {\n\t\tshader_write_stages |= mesh_active ? vk::PipelineStageFlagBits::eMeshShaderEXT\n\t\t                                   : vk::PipelineStageFlagBits::eVertexShader;\n\t}\n\tif (state.ps_active && HasShaderBufferWrites(state.ps_input_info.stage)) {\n\t\tshader_write_stages |= vk::PipelineStageFlagBits::eFragmentShader;\n\t}\n#if defined(KYTY_DS_SYNC_PIXEL_IMAGE_WRITES)\n\tauto has_image_writes = [](const PreparedBindings& prepared) {\n\t\tfor (const auto& image: prepared.images) {\n\t\t\tif (image.desc.type == TextureCache::BindingType::Storage &&\n\t\t\t    !image.desc.info.data.Empty()) return true;\n\t\t}\n\t\treturn false;\n\t};\n\tif (has_image_writes(bindings.vertex)) {\n\t\tshader_write_stages |= mesh_active ? vk::PipelineStageFlagBits::eMeshShaderEXT\n\t\t                                   : vk::PipelineStageFlagBits::eVertexShader;\n\t}\n\tif (bindings.pixel && has_image_writes(*bindings.pixel)) {\n\t\tshader_write_stages |= vk::PipelineStageFlagBits::eFragmentShader;\n\t}\n#endif'''
+          if old not in s: raise SystemExit('shader-write barrier anchor not found')
           draw.write_text(s.replace(old, new, 1), encoding='utf-8')
 
           p = Path('src/graphics/host_gpu/renderer/cache/streamBuffer.cpp')
@@ -99,23 +99,23 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
 
-      - name: Configure Release LTO Build42 attachment feedback fix
+      - name: Configure Release LTO Build43 pixel image write fix
         shell: cmd
         run: |
-          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1 /DKYTY_DS_COLOR_FEEDBACK_BOUNDARY=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-B42-COLOR-FEEDBACK-FLICKER-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
+          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1 /DKYTY_DS_SYNC_PIXEL_IMAGE_WRITES=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-B43-PIXEL-IMAGE-WRITE-FLICKER-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
       - name: Build
         shell: cmd
         run: |
-          cmake --build _Build/windows --target launcher --parallel > b42-color-feedback-flicker-build.log 2>&1
+          cmake --build _Build/windows --target launcher --parallel > b43-pixel-image-write-flicker-build.log 2>&1
           set "rc=%ERRORLEVEL%"
-          type b42-color-feedback-flicker-build.log
+          type b43-pixel-image-write-flicker-build.log
           exit /b %rc%
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: B42-Color-Feedback-Flicker-Windows-build-log
-          path: b42-color-feedback-flicker-build.log
+          name: B43-Pixel-Image-Write-Flicker-Windows-build-log
+          path: b43-pixel-image-write-flicker-build.log
           if-no-files-found: warn
           retention-days: 7
       - name: Install
@@ -124,7 +124,7 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-B42-COLOR-FEEDBACK-FLICKER-LTO
+          name: KytyPS5-Windows-x64-B43-PIXEL-IMAGE-WRITE-FLICKER-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
           retention-days: 90
