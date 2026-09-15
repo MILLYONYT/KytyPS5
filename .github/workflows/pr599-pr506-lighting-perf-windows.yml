@@ -25,7 +25,11 @@ jobs:
           git config user.name "MILLYONYT CI"
           git config user.email "actions@users.noreply.github.com"
           git fetch https://github.com/Techx3/KytyPS5.git a6ebfb5208b61852b4e3f34c03bda677f2861533
-          git cherry-pick --no-commit a6ebfb5208b61852b4e3f34c03bda677f2861533
+
+          # PR506 overlaps four newer PR599 implementations. Cherry-pick is expected
+          # to report conflicts there, so allow that command to return non-zero and
+          # immediately resolve those paths in favor of the frozen PR599 baseline.
+          cmd /c "git cherry-pick --no-commit a6ebfb5208b61852b4e3f34c03bda677f2861533 || exit /b 0"
 
           $pr599Wins = @(
             'src/graphics/host_gpu/renderer/pipeline/pipelineCache.cpp',
@@ -47,6 +51,7 @@ jobs:
             Write-Error "Unresolved merge markers remain after PR506 adaptation"
             exit 1
           }
+          git status --short
 
       - name: Apply Demon Souls lighting/shadow/reflection performance experiment
         shell: pwsh
@@ -59,7 +64,7 @@ jobs:
 
           needle = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
 
-          replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_DISABLE_EXPENSIVE_LIGHTING)\n\t// Demon\'s Souls performance experiment: skip likely off-screen shadow-map and\n\t// reflection-probe passes while keeping the main screen/depth path intact.\n\t// Main scene targets are typically non-square; shadow maps and cubemap/probe\n\t// faces are commonly square. This is intentionally aggressive and isolated to\n\t// this benchmark build so visual impact can be measured against FPS gain.\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_shadow_map = extent.width == extent.height && extent.width >= 256 &&\n\t\t                              extent.width <= 4096;\n\t\tif (likely_shadow_map) {\n\t\t\treturn false;\n\t\t}\n\t}\n\n\tif (!state.depth_info.image_id && state.color_count > 0 && state.color_count <= 6) {\n\t\tbool     all_square = true;\n\t\tuint32_t max_extent = 0;\n\t\tfor (uint32_t i = 0; i < state.color_count; ++i) {\n\t\t\tconst auto extent = state.color_info[i].Extent();\n\t\t\tall_square = all_square && extent.width == extent.height;\n\t\t\tmax_extent = std::max(max_extent, std::max(extent.width, extent.height));\n\t\t}\n\t\tconst bool likely_reflection_probe = all_square && max_extent >= 64 && max_extent <= 1024;\n\t\tif (likely_reflection_probe) {\n\t\t\treturn false;\n\t\t}\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
+          replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_DISABLE_EXPENSIVE_LIGHTING)\n\t// Demon's Souls performance experiment: skip likely off-screen shadow-map and\n\t// reflection-probe passes while keeping the main screen/depth path intact.\n\t// Main scene targets are typically non-square; shadow maps and cubemap/probe\n\t// faces are commonly square. This is intentionally aggressive and isolated to\n\t// this benchmark build so visual impact can be measured against FPS gain.\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_shadow_map = extent.width == extent.height && extent.width >= 256 &&\n\t\t                              extent.width <= 4096;\n\t\tif (likely_shadow_map) {\n\t\t\treturn false;\n\t\t}\n\t}\n\n\tif (!state.depth_info.image_id && state.color_count > 0 && state.color_count <= 6) {\n\t\tbool     all_square = true;\n\t\tuint32_t max_extent = 0;\n\t\tfor (uint32_t i = 0; i < state.color_count; ++i) {\n\t\t\tconst auto extent = state.color_info[i].Extent();\n\t\t\tall_square = all_square && extent.width == extent.height;\n\t\t\tmax_extent = std::max(max_extent, std::max(extent.width, extent.height));\n\t\t}\n\t\tconst bool likely_reflection_probe = all_square && max_extent >= 64 && max_extent <= 1024;\n\t\tif (likely_reflection_probe) {\n\t\t\treturn false;\n\t\t}\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
 
           if needle not in s:
               raise SystemExit('renderDraw.cpp patch anchor not found')
