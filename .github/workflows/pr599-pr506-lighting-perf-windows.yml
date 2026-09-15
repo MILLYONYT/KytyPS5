@@ -86,8 +86,7 @@ jobs:
           old = 'if (m_context.GetGpuResources().PrepareBdaReadRanges(first_ranges)) return;'
           if old not in s: raise SystemExit('PrepareBdaReadRanges callsite not found')
           s = s.replace(old, '(void)first_ranges; // PR562 performs BDA upload discovery from CPU-dirty hints', 1)
-          s, n = re.subn(r'\s*const auto\* buffer = m_context\.GetBufferCache\(\)\.GetLodStatsBuffer\(\);',
-                         '\n                                                const Buffer* buffer = nullptr;', s, count=1)
+          s, n = re.subn(r'\s*const auto\* buffer = m_context\.GetBufferCache\(\)\.GetLodStatsBuffer\(\);', '\n                                                const Buffer* buffer = nullptr;', s, count=1)
           if n != 1: raise SystemExit('GetLodStatsBuffer callsite not found')
           d.write_text(s, encoding='utf-8')
 
@@ -98,9 +97,6 @@ jobs:
           s = s.replace(old, '(void)indirect_args; // PR562 cache path synchronizes dirty BDA buffers through its own preparation path', 1)
           r.write_text(s, encoding='utf-8')
 
-          # PR599 draw-run reuse records resource-manager epochs that PR562 predates.
-          # Neutralize only those epoch reads so the existing PR599 draw-run path remains buildable;
-          # PR562's own dirty tracking remains responsible for resource synchronization.
           rd = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
           s = rd.read_text(encoding='utf-8')
           if s.count('m_context.GetGpuResources().MappingEpoch()') != 2: raise SystemExit('unexpected MappingEpoch call count')
@@ -108,6 +104,15 @@ jobs:
           s = s.replace('m_context.GetGpuResources().MappingEpoch()', '0ull')
           s = s.replace('m_context.GetGpuResources().PreparationAliasEpoch()', '0ull')
           rd.write_text(s, encoding='utf-8')
+
+          # PR599 memory backing aliases call epoch-only hooks that PR562 does not expose.
+          # Draw-run epoch reuse is disabled above, so these compatibility hooks are intentionally no-op.
+          gh = Path('src/graphics/host_gpu/renderer/cache/gpuResourceManager.h')
+          s = gh.read_text(encoding='utf-8')
+          anchor = '\tvoid               PrepareBda();\n'
+          if anchor not in s: raise SystemExit('GpuResourceManager PrepareBda anchor not found')
+          s = s.replace(anchor, anchor + '\tvoid               BeginAliasWrite() noexcept {}\n\tvoid               EndAliasWrite() noexcept {}\n', 1)
+          gh.write_text(s, encoding='utf-8')
           '@ | python -
           git add -A
           $unmerged = git diff --name-only --diff-filter=U
