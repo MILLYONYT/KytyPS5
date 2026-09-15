@@ -53,8 +53,6 @@ jobs:
             'src/graphics/host_gpu/renderer/cache/gpuResourceManager.h'
           )
           foreach ($path in $pr562Wins) { git checkout FETCH_HEAD -- $path; git add -- $path }
-          # Keep PR599's GuestGpu/command-processor unit coherent. PR506 also changes graphicsRun.h;
-          # restoring only graphicsRun.cpp caused ProcessCommands() to lose its class declaration.
           $pr599GuestGpu = @(
             'src/graphics/guest_gpu/command_processor/commandProcessor.h',
             'src/graphics/guest_gpu/command_processor/pm4Handlers.cpp',
@@ -76,6 +74,15 @@ jobs:
           s = s.replace('cp.ReportLodStats(dst, buffer_size, (buffer[3] & ((1u << 19) | (1u << 18))) != 0);',
                         '(void)dst; (void)buffer_size; // PR562 BDA experiment: LOD stats unavailable')
           p.write_text(s, encoding='utf-8')
+          # PR506 auto-merged a BufferCache CPU-write-window adapter into textureCache.cpp.
+          # PR562's BufferCache/MemoryTracker API does not have that adapter, so remove the stale
+          # out-of-line wrapper as a coordinated compatibility fix. It is not part of PR562's BDA path.
+          t = Path('src/graphics/host_gpu/renderer/cache/textureCache.cpp')
+          s = t.read_text(encoding='utf-8')
+          import re
+          s2, n = re.subn(r'\nbool BufferCache::TryInvalidateCpuWriteWindow\(uint64_t fault, uint64_t begin, uint64_t size\) \{\n(?:.|\n)*?\n\}\n', '\n', s, count=1)
+          if n != 1: raise SystemExit('stale TryInvalidateCpuWriteWindow wrapper not found exactly once')
+          t.write_text(s2, encoding='utf-8')
           '@ | python -
           git add -A
           $unmerged = git diff --name-only --diff-filter=U
