@@ -1,4 +1,4 @@
-name: PR599 + PR506 Demon Souls Build13 + Selective BDA Performance Build
+name: PR599 + PR506 Demon Souls Build13 VMA 16MiB Performance Build
 
 on:
   push:
@@ -18,7 +18,6 @@ jobs:
           ref: fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7
           submodules: recursive
           fetch-depth: 0
-
       - name: Apply PR506 FPS optimizations
         shell: pwsh
         run: |
@@ -30,77 +29,9 @@ jobs:
           foreach ($path in $pr599Wins) { git restore --source=HEAD --staged --worktree -- $path }
           git add -A
           $unmerged = git diff --name-only --diff-filter=U
-          if ($unmerged) { Write-Error "Unresolved PR506 merge conflicts remain: $unmerged"; exit 1 }
+          if ($unmerged) { Write-Error "Unresolved merge conflicts remain: $unmerged"; exit 1 }
           $global:LASTEXITCODE = 0
-
-      - name: Apply PR562 selective BDA dirty-hint optimization
-        shell: pwsh
-        run: |
-          git fetch https://github.com/MehmetCambaz/KytyPS5.git 02b57e8fdce98f590ef76a899ca9ac4885563737
-          cmd /c "git cherry-pick --no-commit 02b57e8fdce98f590ef76a899ca9ac4885563737 || exit /b 0"
-          $pr562Wins = @('src/graphics/host_gpu/memoryTracker.cpp','src/graphics/host_gpu/memoryTracker.h','src/graphics/host_gpu/regionManager.h','src/graphics/host_gpu/renderer/cache/bufferCache.cpp','src/graphics/host_gpu/renderer/cache/bufferCache.h','src/graphics/host_gpu/renderer/cache/gpuResourceManager.cpp','src/graphics/host_gpu/renderer/cache/gpuResourceManager.h')
-          foreach ($path in $pr562Wins) { git checkout FETCH_HEAD -- $path; git add -- $path }
-          $pr599GuestGpu = @('src/graphics/guest_gpu/command_processor/commandProcessor.h','src/graphics/guest_gpu/command_processor/pm4Handlers.cpp','src/graphics/guest_gpu/graphicsRun.cpp','src/graphics/guest_gpu/graphicsRun.h')
-          foreach ($path in $pr599GuestGpu) { git checkout fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7 -- $path; git add -- $path }
-          @'
-          from pathlib import Path
-          import re
-          h = Path('src/graphics/guest_gpu/command_processor/commandProcessor.h')
-          s = h.read_text(encoding='utf-8')
-          s = '\n'.join(l for l in s.splitlines() if 'void ReportLodStats(' not in l) + '\n'
-          h.write_text(s, encoding='utf-8')
-          p = Path('src/graphics/guest_gpu/command_processor/pm4Handlers.cpp')
-          s = p.read_text(encoding='utf-8')
-          s = s.replace('cp.ReportLodStats(dst, buffer_size, (buffer[3] & ((1u << 19) | (1u << 18))) != 0);','(void)dst; (void)buffer_size; // PR562 BDA experiment: LOD stats accounting unavailable')
-          p.write_text(s, encoding='utf-8')
-          t = Path('src/graphics/host_gpu/renderer/cache/textureCache.cpp')
-          s = t.read_text(encoding='utf-8')
-          s2, n = re.subn(r'\nbool BufferCache::TryInvalidateCpuWriteWindow\(uint64_t fault, uint64_t begin, uint64_t size\) \{\n(?:.|\n)*?\n\}\n', '\n', s, count=1)
-          if n != 1: raise SystemExit('stale TryInvalidateCpuWriteWindow wrapper not found exactly once')
-          t.write_text(s2, encoding='utf-8')
-
-          d = Path('src/graphics/host_gpu/renderer/pipeline/descriptors.cpp')
-          s = d.read_text(encoding='utf-8')
-          old = 'if (m_context.GetGpuResources().PrepareBdaReadRanges(first_ranges)) return;'
-          if old not in s: raise SystemExit('PrepareBdaReadRanges callsite not found')
-          s = s.replace(old, 'm_context.GetGpuResources().PrepareBda(); return; // PR562 selective dirty-hint sync', 1)
-          old_lod = 'const auto* buffer = m_context.GetBufferCache().GetLodStatsBuffer();'
-          if old_lod not in s: raise SystemExit('GetLodStatsBuffer callsite not found')
-          s = s.replace(old_lod, 'const auto* buffer = &m_context.GetBufferCache().GetUtilityBuffer(MemoryUsage::DeviceLocal);', 1)
-          d.write_text(s, encoding='utf-8')
-
-          r = Path('src/graphics/host_gpu/renderer/renderCompute.cpp')
-          s = r.read_text(encoding='utf-8')
-          old = 'm_context.GetBufferCache().EnsureBufferContents(indirect_args, 3u * sizeof(uint32_t));'
-          if old not in s: raise SystemExit('EnsureBufferContents callsite not found')
-          s = s.replace(old, 'm_context.GetBufferCache().SynchronizeBuffersInRange(indirect_args, 3u * sizeof(uint32_t));', 1)
-          r.write_text(s, encoding='utf-8')
-
-          rd = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
-          s = rd.read_text(encoding='utf-8')
-          if s.count('m_context.GetGpuResources().MappingEpoch()') != 2: raise SystemExit('unexpected MappingEpoch call count')
-          if s.count('m_context.GetGpuResources().PreparationAliasEpoch()') != 2: raise SystemExit('unexpected PreparationAliasEpoch call count')
-          s = s.replace('m_context.GetGpuResources().MappingEpoch()', '0ull')
-          s = s.replace('m_context.GetGpuResources().PreparationAliasEpoch()', '0ull')
-          rd.write_text(s, encoding='utf-8')
-
-          gh = Path('src/graphics/host_gpu/renderer/cache/gpuResourceManager.h')
-          s = gh.read_text(encoding='utf-8')
-          anchor = '\tvoid               PrepareBda();\n'
-          if anchor not in s: raise SystemExit('GpuResourceManager PrepareBda anchor not found')
-          compat = '\tvoid               BeginAliasWrite() noexcept {}\n\tvoid               EndAliasWrite() noexcept {}\n\t[[nodiscard]] bool HasReadWatchers(uint64_t vaddr, uint64_t size) const noexcept { return m_page_manager.HasReadWatchers(vaddr, size); }\n'
-          s = s.replace(anchor, anchor + compat, 1)
-          gh.write_text(s, encoding='utf-8')
-          '@ | python -
-          git add -A
-          $unmerged = git diff --name-only --diff-filter=U
-          if ($unmerged) { Write-Error "Unresolved PR562 merge conflicts remain: $unmerged"; exit 1 }
-          git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- src
-          if ($LASTEXITCODE -eq 0) { Write-Error "Unresolved merge markers remain"; exit 1 }
-          if ($LASTEXITCODE -ne 1) { Write-Error "git grep conflict-marker check failed with exit code $LASTEXITCODE"; exit 1 }
-          $global:LASTEXITCODE = 0
-
-      - name: Apply frozen Build 13 performance patches
+      - name: Apply frozen Build13 plus 16MiB VMA experiment
         shell: pwsh
         run: |
           @'
@@ -109,16 +40,15 @@ jobs:
           s = draw.read_text(encoding='utf-8')
           needle = '\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
           replacement = '\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 && extent.width <= 4096;\n\t\tif (likely_large_shadow_map) { return false; }\n\t}\n#endif\n\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) {\n\t\tconst auto& extent = state.color_info[0].desc.info.extent;\n\t\tconst bool likely_small_postfx = extent.width >= 64 && extent.height >= 64 && extent.width <= 1024 && extent.height <= 1024;\n\t\tif (likely_small_postfx) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
-          if needle not in s: raise SystemExit('Build13 render baseline anchor not found')
+          if needle not in s: raise SystemExit('Build13 render anchor not found')
           draw.write_text(s.replace(needle, replacement, 1), encoding='utf-8')
           p = Path('src/graphics/host_gpu/renderer/cache/streamBuffer.cpp')
           s = p.read_text(encoding='utf-8')
           old = '\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n\tVmaAllocationCreateInfo allocation_info {};'
-          new = '\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n#if defined(KYTY_DS_VMA_SUBALLOC_PERF)\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    (with_bda && size >= (4ull * 1024 * 1024)) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#else\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#endif\n\tVmaAllocationCreateInfo allocation_info {};'
-          if old not in s: raise SystemExit('Build13 VMA anchor not found')
+          new = '\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n#if defined(KYTY_DS_VMA_SUBALLOC_PERF)\n\t// Build13 proved VMA suballocation removes the measured dedicated-allocation stalls.\n\t// Extend the cutoff from 4 MiB to 16 MiB; exact guest ranges and BDA semantics stay intact.\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    (with_bda && size >= (16ull * 1024 * 1024)) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#else\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#endif\n\tVmaAllocationCreateInfo allocation_info {};'
+          if old not in s: raise SystemExit('VMA anchor not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
           '@ | python -
-
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
       - name: Setup Ninja
@@ -151,23 +81,23 @@ jobs:
           target: desktop
           arch: win64_msvc2022_64
           cache: true
-      - name: Configure Release LTO selective BDA build
+      - name: Configure Release LTO Build13 VMA16 build
         shell: cmd
         run: |
-          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-B13-BDA-SELECTIVE-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
+          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-B13-VMA16-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
       - name: Build
         shell: cmd
         run: |
-          cmake --build _Build/windows --target launcher --parallel > bda-selective-build.log 2>&1
+          cmake --build _Build/windows --target launcher --parallel > b13-vma16-build.log 2>&1
           set "rc=%ERRORLEVEL%"
-          type bda-selective-build.log
+          type b13-vma16-build.log
           exit /b %rc%
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: BDA-Selective-Windows-build-log
-          path: bda-selective-build.log
+          name: B13-VMA16-Windows-build-log
+          path: b13-vma16-build.log
           if-no-files-found: warn
           retention-days: 7
       - name: Install
@@ -176,6 +106,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-B13-BDA-SELECTIVE-LTO
+          name: KytyPS5-Windows-x64-B13-VMA16-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
