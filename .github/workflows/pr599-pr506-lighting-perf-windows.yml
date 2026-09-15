@@ -53,19 +53,18 @@ jobs:
             'src/graphics/host_gpu/renderer/cache/gpuResourceManager.h'
           )
           foreach ($path in $pr562Wins) { git checkout FETCH_HEAD -- $path; git add -- $path }
-          # Keep the entire PR599 command processor trio coherent. PR562 does not modify these
-          # files; mixing PR506's older header with PR599 graphicsRun caused the Build 21 errors.
-          $pr599CommandProcessor = @(
+          # Keep PR599's GuestGpu/command-processor unit coherent. PR506 also changes graphicsRun.h;
+          # restoring only graphicsRun.cpp caused ProcessCommands() to lose its class declaration.
+          $pr599GuestGpu = @(
             'src/graphics/guest_gpu/command_processor/commandProcessor.h',
             'src/graphics/guest_gpu/command_processor/pm4Handlers.cpp',
-            'src/graphics/guest_gpu/graphicsRun.cpp'
+            'src/graphics/guest_gpu/graphicsRun.cpp',
+            'src/graphics/guest_gpu/graphicsRun.h'
           )
-          foreach ($path in $pr599CommandProcessor) {
+          foreach ($path in $pr599GuestGpu) {
             git checkout fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7 -- $path
             git add -- $path
           }
-          # PR562 removed BufferCache::ReportLodStats. PR599 only calls it from the optional PM4
-          # LOD statistics packet, so disable that diagnostic wrapper/call for this experiment.
           @'
           from pathlib import Path
           h = Path('src/graphics/guest_gpu/command_processor/commandProcessor.h')
