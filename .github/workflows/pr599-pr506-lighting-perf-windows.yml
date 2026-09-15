@@ -26,12 +26,7 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git fetch https://github.com/Techx3/KytyPS5.git a6ebfb5208b61852b4e3f34c03bda677f2861533
           cmd /c "git cherry-pick --no-commit a6ebfb5208b61852b4e3f34c03bda677f2861533 || exit /b 0"
-          $pr599Wins = @(
-            'src/graphics/host_gpu/renderer/pipeline/pipelineCache.cpp',
-            'src/graphics/host_gpu/renderer/renderCompute.cpp',
-            'src/graphics/shader/recompiler/ir/passes/ResourceMaterialization.cpp',
-            'src/graphics/shader/recompiler/ir/passes/SrtWalker.h'
-          )
+          $pr599Wins = @('src/graphics/host_gpu/renderer/pipeline/pipelineCache.cpp','src/graphics/host_gpu/renderer/renderCompute.cpp','src/graphics/shader/recompiler/ir/passes/ResourceMaterialization.cpp','src/graphics/shader/recompiler/ir/passes/SrtWalker.h')
           foreach ($path in $pr599Wins) { git restore --source=HEAD --staged --worktree -- $path }
           git add -A
           $unmerged = git diff --name-only --diff-filter=U
@@ -43,26 +38,10 @@ jobs:
         run: |
           git fetch https://github.com/MehmetCambaz/KytyPS5.git 02b57e8fdce98f590ef76a899ca9ac4885563737
           cmd /c "git cherry-pick --no-commit 02b57e8fdce98f590ef76a899ca9ac4885563737 || exit /b 0"
-          $pr562Wins = @(
-            'src/graphics/host_gpu/memoryTracker.cpp',
-            'src/graphics/host_gpu/memoryTracker.h',
-            'src/graphics/host_gpu/regionManager.h',
-            'src/graphics/host_gpu/renderer/cache/bufferCache.cpp',
-            'src/graphics/host_gpu/renderer/cache/bufferCache.h',
-            'src/graphics/host_gpu/renderer/cache/gpuResourceManager.cpp',
-            'src/graphics/host_gpu/renderer/cache/gpuResourceManager.h'
-          )
+          $pr562Wins = @('src/graphics/host_gpu/memoryTracker.cpp','src/graphics/host_gpu/memoryTracker.h','src/graphics/host_gpu/regionManager.h','src/graphics/host_gpu/renderer/cache/bufferCache.cpp','src/graphics/host_gpu/renderer/cache/bufferCache.h','src/graphics/host_gpu/renderer/cache/gpuResourceManager.cpp','src/graphics/host_gpu/renderer/cache/gpuResourceManager.h')
           foreach ($path in $pr562Wins) { git checkout FETCH_HEAD -- $path; git add -- $path }
-          $pr599GuestGpu = @(
-            'src/graphics/guest_gpu/command_processor/commandProcessor.h',
-            'src/graphics/guest_gpu/command_processor/pm4Handlers.cpp',
-            'src/graphics/guest_gpu/graphicsRun.cpp',
-            'src/graphics/guest_gpu/graphicsRun.h'
-          )
-          foreach ($path in $pr599GuestGpu) {
-            git checkout fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7 -- $path
-            git add -- $path
-          }
+          $pr599GuestGpu = @('src/graphics/guest_gpu/command_processor/commandProcessor.h','src/graphics/guest_gpu/command_processor/pm4Handlers.cpp','src/graphics/guest_gpu/graphicsRun.cpp','src/graphics/guest_gpu/graphicsRun.h')
+          foreach ($path in $pr599GuestGpu) { git checkout fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7 -- $path; git add -- $path }
           @'
           from pathlib import Path
           import re
@@ -72,15 +51,13 @@ jobs:
           h.write_text(s, encoding='utf-8')
           p = Path('src/graphics/guest_gpu/command_processor/pm4Handlers.cpp')
           s = p.read_text(encoding='utf-8')
-          s = s.replace('cp.ReportLodStats(dst, buffer_size, (buffer[3] & ((1u << 19) | (1u << 18))) != 0);',
-                        '(void)dst; (void)buffer_size; // PR562 BDA experiment: LOD stats unavailable')
+          s = s.replace('cp.ReportLodStats(dst, buffer_size, (buffer[3] & ((1u << 19) | (1u << 18))) != 0);','(void)dst; (void)buffer_size; // PR562 BDA experiment: LOD stats unavailable')
           p.write_text(s, encoding='utf-8')
           t = Path('src/graphics/host_gpu/renderer/cache/textureCache.cpp')
           s = t.read_text(encoding='utf-8')
           s2, n = re.subn(r'\nbool BufferCache::TryInvalidateCpuWriteWindow\(uint64_t fault, uint64_t begin, uint64_t size\) \{\n(?:.|\n)*?\n\}\n', '\n', s, count=1)
           if n != 1: raise SystemExit('stale TryInvalidateCpuWriteWindow wrapper not found exactly once')
           t.write_text(s2, encoding='utf-8')
-
           d = Path('src/graphics/host_gpu/renderer/pipeline/descriptors.cpp')
           s = d.read_text(encoding='utf-8')
           old = 'if (m_context.GetGpuResources().PrepareBdaReadRanges(first_ranges)) return;'
@@ -89,14 +66,12 @@ jobs:
           s, n = re.subn(r'\s*const auto\* buffer = m_context\.GetBufferCache\(\)\.GetLodStatsBuffer\(\);', '\n                                                const Buffer* buffer = nullptr;', s, count=1)
           if n != 1: raise SystemExit('GetLodStatsBuffer callsite not found')
           d.write_text(s, encoding='utf-8')
-
           r = Path('src/graphics/host_gpu/renderer/renderCompute.cpp')
           s = r.read_text(encoding='utf-8')
           old = 'm_context.GetBufferCache().EnsureBufferContents(indirect_args, 3u * sizeof(uint32_t));'
           if old not in s: raise SystemExit('EnsureBufferContents callsite not found')
           s = s.replace(old, '(void)indirect_args; // PR562 cache path synchronizes dirty BDA buffers through its own preparation path', 1)
           r.write_text(s, encoding='utf-8')
-
           rd = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
           s = rd.read_text(encoding='utf-8')
           if s.count('m_context.GetGpuResources().MappingEpoch()') != 2: raise SystemExit('unexpected MappingEpoch call count')
@@ -104,17 +79,11 @@ jobs:
           s = s.replace('m_context.GetGpuResources().MappingEpoch()', '0ull')
           s = s.replace('m_context.GetGpuResources().PreparationAliasEpoch()', '0ull')
           rd.write_text(s, encoding='utf-8')
-
           gh = Path('src/graphics/host_gpu/renderer/cache/gpuResourceManager.h')
           s = gh.read_text(encoding='utf-8')
           anchor = '\tvoid               PrepareBda();\n'
           if anchor not in s: raise SystemExit('GpuResourceManager PrepareBda anchor not found')
-          compat = '''\tvoid               BeginAliasWrite() noexcept {}
-\tvoid               EndAliasWrite() noexcept {}
-\t[[nodiscard]] bool HasReadWatchers(uint64_t vaddr, uint64_t size) const noexcept {
-\t\treturn m_page_manager.HasReadWatchers(vaddr, size);
-\t}
-'''
+          compat = '\tvoid               BeginAliasWrite() noexcept {}\n\tvoid               EndAliasWrite() noexcept {}\n\t[[nodiscard]] bool HasReadWatchers(uint64_t vaddr, uint64_t size) const noexcept { return m_page_manager.HasReadWatchers(vaddr, size); }\n'
           s = s.replace(anchor, anchor + compat, 1)
           gh.write_text(s, encoding='utf-8')
           '@ | python -
@@ -133,14 +102,14 @@ jobs:
           from pathlib import Path
           draw = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
           s = draw.read_text(encoding='utf-8')
-          needle = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
-          replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 && extent.width <= 4096;\n\t\tif (likely_large_shadow_map) { return false; }\n\t}\n#endif\n\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) {\n\t\tconst auto& extent = state.color_info[0].desc.info.extent;\n\t\tconst bool likely_small_postfx = extent.width >= 64 && extent.height >= 64 && extent.width <= 1024 && extent.height <= 1024;\n\t\tif (likely_small_postfx) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
+          needle = '\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
+          replacement = '\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 && extent.width <= 4096;\n\t\tif (likely_large_shadow_map) { return false; }\n\t}\n#endif\n\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) {\n\t\tconst auto& extent = state.color_info[0].desc.info.extent;\n\t\tconst bool likely_small_postfx = extent.width >= 64 && extent.height >= 64 && extent.width <= 1024 && extent.height <= 1024;\n\t\tif (likely_small_postfx) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
           if needle not in s: raise SystemExit('Build13 render baseline anchor not found')
           draw.write_text(s.replace(needle, replacement, 1), encoding='utf-8')
           p = Path('src/graphics/host_gpu/renderer/cache/streamBuffer.cpp')
           s = p.read_text(encoding='utf-8')
-          old = '''\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n\tVmaAllocationCreateInfo allocation_info {};'''
-          new = '''\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n#if defined(KYTY_DS_VMA_SUBALLOC_PERF)\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    (with_bda && size >= (4ull * 1024 * 1024)) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#else\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#endif\n\tVmaAllocationCreateInfo allocation_info {};'''
+          old = '\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n\tVmaAllocationCreateInfo allocation_info {};'
+          new = '\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n#if defined(KYTY_DS_VMA_SUBALLOC_PERF)\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    (with_bda && size >= (4ull * 1024 * 1024)) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#else\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#endif\n\tVmaAllocationCreateInfo allocation_info {};'
           if old not in s: raise SystemExit('Build13 VMA anchor not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
           '@ | python -
