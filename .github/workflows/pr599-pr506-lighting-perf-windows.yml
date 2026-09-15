@@ -1,4 +1,4 @@
-name: PR599 + PR506 Demon Souls VMA + Unmap Sync Performance Build
+name: PR599 + PR506 Demon Souls Build13 + Selective BDA Performance Build
 
 on:
   push:
@@ -35,13 +35,22 @@ jobs:
           foreach ($path in $pr599Wins) { git restore --source=HEAD --staged --worktree -- $path }
           git add -A
           $unmerged = git diff --name-only --diff-filter=U
-          if ($unmerged) { Write-Error "Unresolved merge conflicts remain: $unmerged"; exit 1 }
+          if ($unmerged) { Write-Error "Unresolved PR506 merge conflicts remain: $unmerged"; exit 1 }
+          $global:LASTEXITCODE = 0
+
+      - name: Apply PR562 selective BDA dirty-hint optimization
+        shell: pwsh
+        run: |
+          git fetch https://github.com/MehmetCambaz/KytyPS5.git 02b57e8fdce98f590ef76a899ca9ac4885563737
+          cmd /c "git cherry-pick --no-commit 02b57e8fdce98f590ef76a899ca9ac4885563737 || exit /b 0"
+          $unmerged = git diff --name-only --diff-filter=U
+          if ($unmerged) { Write-Error "Unresolved PR562 merge conflicts remain: $unmerged"; exit 1 }
           git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- src
           if ($LASTEXITCODE -eq 0) { Write-Error "Unresolved merge markers remain"; exit 1 }
           if ($LASTEXITCODE -ne 1) { Write-Error "git grep conflict-marker check failed with exit code $LASTEXITCODE"; exit 1 }
           $global:LASTEXITCODE = 0
 
-      - name: Apply frozen Build 13 baseline plus redundant-unmap sync optimization
+      - name: Apply frozen Build 13 performance patches
         shell: pwsh
         run: |
           @'
@@ -50,24 +59,17 @@ jobs:
           s = draw.read_text(encoding='utf-8')
           needle = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
           replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 && extent.width <= 4096;\n\t\tif (likely_large_shadow_map) { return false; }\n\t}\n#endif\n\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) {\n\t\tconst auto& extent = state.color_info[0].desc.info.extent;\n\t\tconst bool likely_small_postfx = extent.width >= 64 && extent.height >= 64 && extent.width <= 1024 && extent.height <= 1024;\n\t\tif (likely_small_postfx) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
-          if needle not in s: raise SystemExit('performance baseline anchor not found')
+          if needle not in s: raise SystemExit('Build13 render baseline anchor not found')
           draw.write_text(s.replace(needle, replacement, 1), encoding='utf-8')
 
           p = Path('src/graphics/host_gpu/renderer/cache/streamBuffer.cpp')
           s = p.read_text(encoding='utf-8')
           old = '''\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n\tVmaAllocationCreateInfo allocation_info {};'''
           new = '''\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n#if defined(KYTY_DS_VMA_SUBALLOC_PERF)\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    (with_bda && size >= (4ull * 1024 * 1024)) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#else\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#endif\n\tVmaAllocationCreateInfo allocation_info {};'''
-          if old not in s: raise SystemExit('VMA BDA allocation anchor not found')
-          p.write_text(s.replace(old, new, 1), encoding='utf-8')
-
-          p = Path('src/graphics/host_gpu/renderer/cache/gpuResourceManager.cpp')
-          s = p.read_text(encoding='utf-8')
-          old = '''void GpuResourceManager::UnmapMemory(uint64_t vaddr, uint64_t size) {\n\tif (CommandScheduler::InDeferredOperation()) {'''
-          new = '''void GpuResourceManager::UnmapMemory(uint64_t vaddr, uint64_t size) {\n#if defined(KYTY_DS_UNMAP_SYNC_PERF)\n\t// Unmapping guest memory that was never mapped as a GPU resource cannot invalidate\n\t// either GPU cache. Avoid SendCommandSync + scheduler Finish in that common case.\n\t// This is the upstream PR483 fast path, applied on top of the frozen Build 13 baseline.\n\tif (!GuestRange {vaddr, size}.Valid()) {\n\t\treturn;\n\t}\n\t{\n\t\tstd::shared_lock lock(m_mapped_ranges_mutex);\n\t\tif (!m_mapped_ranges.Intersects(vaddr, size)) {\n\t\t\treturn;\n\t\t}\n\t}\n#endif\n\tif (CommandScheduler::InDeferredOperation()) {'''
-          if old not in s: raise SystemExit('UnmapMemory anchor not found')
+          if old not in s: raise SystemExit('Build13 VMA anchor not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
           '@ | python -
-          git diff -- src/graphics/host_gpu/renderer/renderDraw.cpp src/graphics/host_gpu/renderer/cache/streamBuffer.cpp src/graphics/host_gpu/renderer/cache/gpuResourceManager.cpp
+          git diff -- src/graphics/host_gpu/renderer/renderDraw.cpp src/graphics/host_gpu/renderer/cache/streamBuffer.cpp
 
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -101,23 +103,23 @@ jobs:
           target: desktop
           arch: win64_msvc2022_64
           cache: true
-      - name: Configure Release LTO VMA plus unmap-sync performance build
+      - name: Configure Release LTO selective BDA build
         shell: cmd
         run: |
-          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1 /DKYTY_DS_UNMAP_SYNC_PERF=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-VMA-UNMAP-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
+          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-B13-BDA-SELECTIVE-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
       - name: Build
         shell: cmd
         run: |
-          cmake --build _Build/windows --target launcher --parallel > vma-unmap-build.log 2>&1
+          cmake --build _Build/windows --target launcher --parallel > bda-selective-build.log 2>&1
           set "rc=%ERRORLEVEL%"
-          type vma-unmap-build.log
+          type bda-selective-build.log
           exit /b %rc%
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: VMA-Unmap-Windows-build-log
-          path: vma-unmap-build.log
+          name: BDA-Selective-Windows-build-log
+          path: bda-selective-build.log
           if-no-files-found: warn
           retention-days: 7
       - name: Install
@@ -126,6 +128,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-PR599-PR506-DS-VMA-UNMAP-LTO
+          name: KytyPS5-Windows-x64-B13-BDA-SELECTIVE-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
