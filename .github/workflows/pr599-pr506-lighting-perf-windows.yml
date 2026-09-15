@@ -44,13 +44,18 @@ jobs:
           git fetch https://github.com/MehmetCambaz/KytyPS5.git 02b57e8fdce98f590ef76a899ca9ac4885563737
           cmd /c "git cherry-pick --no-commit 02b57e8fdce98f590ef76a899ca9ac4885563737 || exit /b 0"
           $pr562Wins = @(
+            'src/graphics/host_gpu/memoryTracker.cpp',
+            'src/graphics/host_gpu/memoryTracker.h',
             'src/graphics/host_gpu/regionManager.h',
             'src/graphics/host_gpu/renderer/cache/bufferCache.cpp',
             'src/graphics/host_gpu/renderer/cache/bufferCache.h',
             'src/graphics/host_gpu/renderer/cache/gpuResourceManager.cpp',
             'src/graphics/host_gpu/renderer/cache/gpuResourceManager.h'
           )
-          foreach ($path in $pr562Wins) { git checkout --theirs -- $path; git add -- $path }
+          foreach ($path in $pr562Wins) { git checkout FETCH_HEAD -- $path; git add -- $path }
+          # PR506's command processor has a newer LOD-stat wrapper that PR562's BufferCache does not expose.
+          # Keep the PR599 command processor API so the selective BDA patch remains self-consistent.
+          git restore --source=HEAD --staged --worktree -- src/graphics/guest_gpu/command_processor/commandProcessor.h
           git add -A
           $unmerged = git diff --name-only --diff-filter=U
           if ($unmerged) { Write-Error "Unresolved PR562 merge conflicts remain: $unmerged"; exit 1 }
