@@ -1,4 +1,4 @@
-name: PR599 + PR506 Demon Souls FindBuffer Deep Profiling Build
+name: PR599 + PR506 Demon Souls Buffer Churn Performance Build
 
 on:
   push:
@@ -41,7 +41,7 @@ jobs:
           if ($LASTEXITCODE -ne 1) { Write-Error "git grep conflict-marker check failed with exit code $LASTEXITCODE"; exit 1 }
           $global:LASTEXITCODE = 0
 
-      - name: Apply 10-12-18 baseline and deep FindBuffer profiler
+      - name: Apply 10-12-18 baseline and buffer churn optimization
         shell: pwsh
         run: |
           @'
@@ -56,12 +56,8 @@ jobs:
 
           p = Path('src/graphics/host_gpu/renderer/cache/bufferCache.cpp')
           s = p.read_text(encoding='utf-8')
-          inc = '#include <algorithm>\n'
-          if inc not in s: raise SystemExit('buffer profiler include anchor not found')
-          s = s.replace(inc, inc + '#include <atomic>\n#include <chrono>\n#include <cstdio>\n', 1)
-
           old = '''BufferId BufferCache::FindBuffer(uint64_t vaddr, uint64_t size) {\n\tif (vaddr == 0) {\n\t\treturn NULL_BUFFER_ID;\n\t}\n\tif (!GuestRange {vaddr, size}.Valid()) {\n\t\tEXIT("BufferCache: invalid buffer discovery request\\n");\n\t}\n\tconst auto* owner = m_page_table.Find(vaddr >> PageTable::kPageBits);\n\tif (owner != nullptr && *owner) {\n\t\tauto& buffer = m_slot_buffers[*owner];\n\t\tif (buffer.IsInBounds(vaddr, size)) {\n\t\t\treturn *owner;\n\t\t}\n\t}\n\treturn CreateBuffer(vaddr, size);\n}'''
-          new = '''BufferId BufferCache::FindBuffer(uint64_t vaddr, uint64_t size) {\n\tif (vaddr == 0) { return NULL_BUFFER_ID; }\n\tif (!GuestRange {vaddr, size}.Valid()) { EXIT("BufferCache: invalid buffer discovery request\\n"); }\n#if defined(KYTY_DS_FINDBUFFER_PROFILE)\n\tusing Clock = std::chrono::steady_clock;\n\tstatic std::atomic<uint64_t> calls {0}, hits {0}, misses {0}, lookup_ns {0}, create_ns {0}, worst_create_ns {0};\n\tconst auto t0 = Clock::now();\n#endif\n\tconst auto* owner = m_page_table.Find(vaddr >> PageTable::kPageBits);\n\tif (owner != nullptr && *owner) {\n\t\tauto& buffer = m_slot_buffers[*owner];\n\t\tif (buffer.IsInBounds(vaddr, size)) {\n#if defined(KYTY_DS_FINDBUFFER_PROFILE)\n\t\t\tconst auto t1 = Clock::now();\n\t\t\tlookup_ns.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count()), std::memory_order_relaxed);\n\t\t\thits.fetch_add(1, std::memory_order_relaxed);\n\t\t\tconst auto n = calls.fetch_add(1, std::memory_order_relaxed) + 1;\n\t\t\tif ((n & 4095u) == 0) std::printf("DS_FINDBUFFER calls=%llu hits=%llu misses=%llu lookup_ms=%.3f create_ms=%.3f worst_create_ms=%.3f\\n", static_cast<unsigned long long>(n), static_cast<unsigned long long>(hits.exchange(0)), static_cast<unsigned long long>(misses.exchange(0)), lookup_ns.exchange(0)/1000000.0, create_ns.exchange(0)/1000000.0, worst_create_ns.exchange(0)/1000000.0);\n#endif\n\t\t\treturn *owner;\n\t\t}\n\t}\n#if defined(KYTY_DS_FINDBUFFER_PROFILE)\n\tconst auto t1 = Clock::now();\n\tlookup_ns.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count()), std::memory_order_relaxed);\n\tconst auto tc0 = Clock::now();\n#endif\n\tconst auto id = CreateBuffer(vaddr, size);\n#if defined(KYTY_DS_FINDBUFFER_PROFILE)\n\tconst auto tc1 = Clock::now();\n\tconst auto cns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(tc1-tc0).count());\n\tcreate_ns.fetch_add(cns, std::memory_order_relaxed);\n\tmisses.fetch_add(1, std::memory_order_relaxed);\n\tauto worst = worst_create_ns.load(std::memory_order_relaxed);\n\twhile (cns > worst && !worst_create_ns.compare_exchange_weak(worst, cns, std::memory_order_relaxed)) {}\n\tif (cns >= 1000000ull) std::printf("DS_FINDBUFFER_STALL create_ms=%.3f addr=0x%016llx size=0x%llx\\n", cns/1000000.0, static_cast<unsigned long long>(vaddr), static_cast<unsigned long long>(size));\n\tconst auto n = calls.fetch_add(1, std::memory_order_relaxed) + 1;\n\tif ((n & 4095u) == 0) std::printf("DS_FINDBUFFER calls=%llu hits=%llu misses=%llu lookup_ms=%.3f create_ms=%.3f worst_create_ms=%.3f\\n", static_cast<unsigned long long>(n), static_cast<unsigned long long>(hits.exchange(0)), static_cast<unsigned long long>(misses.exchange(0)), lookup_ns.exchange(0)/1000000.0, create_ns.exchange(0)/1000000.0, worst_create_ns.exchange(0)/1000000.0);\n#endif\n\treturn id;\n}'''
+          new = '''BufferId BufferCache::FindBuffer(uint64_t vaddr, uint64_t size) {\n\tif (vaddr == 0) {\n\t\treturn NULL_BUFFER_ID;\n\t}\n\tif (!GuestRange {vaddr, size}.Valid()) {\n\t\tEXIT("BufferCache: invalid buffer discovery request\\n");\n\t}\n\tconst auto* owner = m_page_table.Find(vaddr >> PageTable::kPageBits);\n\tif (owner != nullptr && *owner) {\n\t\tauto& buffer = m_slot_buffers[*owner];\n\t\tif (buffer.IsInBounds(vaddr, size)) {\n\t\t\treturn *owner;\n\t\t}\n\t}\n#if defined(KYTY_DS_BUFFER_CHURN_PERF)\n\t// Demon Souls repeatedly asks for tiny ranges just outside an existing cached buffer.\n\t// Before allocating/merging a replacement, check nearby page owners and reuse any buffer\n\t// that already covers the complete request. This preserves buffer identity and avoids the\n\t// expensive CreateBuffer -> JoinOverlap -> CopyFrom -> DeleteBuffer churn seen in profiling.\n\tconst uint64_t first_page = vaddr >> PageTable::kPageBits;\n\tconst uint64_t last_page  = (vaddr + size - 1) >> PageTable::kPageBits;\n\tfor (uint64_t page = first_page; page <= last_page; ++page) {\n\t\tconst auto* candidate_owner = m_page_table.Find(page);\n\t\tif (candidate_owner != nullptr && *candidate_owner) {\n\t\t\tauto& candidate = m_slot_buffers[*candidate_owner];\n\t\t\tif (!candidate.is_deleted && candidate.IsInBounds(vaddr, size)) {\n\t\t\t\treturn *candidate_owner;\n\t\t\t}\n\t\t}\n\t\tif (page == last_page) { break; }\n\t}\n#endif\n\treturn CreateBuffer(vaddr, size);\n}'''
           if old not in s: raise SystemExit('FindBuffer anchor not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
           '@ | python -
@@ -99,23 +95,23 @@ jobs:
           target: desktop
           arch: win64_msvc2022_64
           cache: true
-      - name: Configure Release LTO deep profiler
+      - name: Configure Release LTO buffer churn performance build
         shell: cmd
         run: |
-          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_FINDBUFFER_PROFILE=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-FINDBUFFER-PROFILE-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
+          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_BUFFER_CHURN_PERF=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-BUFFER-CHURN-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
       - name: Build
         shell: cmd
         run: |
-          cmake --build _Build/windows --target launcher --parallel > findbuffer-profile-build.log 2>&1
+          cmake --build _Build/windows --target launcher --parallel > buffer-churn-build.log 2>&1
           set "rc=%ERRORLEVEL%"
-          type findbuffer-profile-build.log
+          type buffer-churn-build.log
           exit /b %rc%
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: FindBuffer-Profile-Windows-build-log
-          path: findbuffer-profile-build.log
+          name: Buffer-Churn-Windows-build-log
+          path: buffer-churn-build.log
           if-no-files-found: warn
           retention-days: 7
       - name: Install
@@ -124,6 +120,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-PR599-PR506-DS-FINDBUFFER-PROFILE-LTO
+          name: KytyPS5-Windows-x64-PR599-PR506-DS-BUFFER-CHURN-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
