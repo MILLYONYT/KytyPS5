@@ -1,4 +1,4 @@
-name: PR599 + PR506 Demon Souls Selective Shadow PostFX Performance Build
+name: PR599 + PR506 Demon Souls Binding Breakdown Profiling Build
 
 on:
   push:
@@ -41,20 +41,33 @@ jobs:
           if ($LASTEXITCODE -ne 1) { Write-Error "git grep conflict-marker check failed with exit code $LASTEXITCODE"; exit 1 }
           $global:LASTEXITCODE = 0
 
-      - name: Apply selective shadow and conservative PostFX skipping
+      - name: Apply performance baseline and binding-stage profiler
         shell: pwsh
         run: |
           @'
           from pathlib import Path
-          p = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
-          s = p.read_text(encoding='utf-8')
+
+          # Preserve current 10/12/18 performance baseline: selective shadows + conservative PostFX.
+          draw = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
+          s = draw.read_text(encoding='utf-8')
           needle = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
-          replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 &&\n\t\t                                    extent.width <= 4096;\n\t\tif (likely_large_shadow_map) { return false; }\n\t}\n#endif\n\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\t// Conservative first PostFX experiment: skip only small, color-only fullscreen-style\n\t// intermediate passes. Preserve depth-dependent passes and large/full-resolution outputs\n\t// so temporal AA/reconstruction and the main scene path remain intact.\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) {\n\t\tconst auto& extent = state.color_info[0].desc.info.extent;\n\t\tconst bool likely_small_postfx = extent.width >= 64 && extent.height >= 64 &&\n\t\t                                  extent.width <= 1024 && extent.height <= 1024;\n\t\tif (likely_small_postfx) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
-          if needle not in s: raise SystemExit('selective shadow/PostFX patch anchor not found')
-          s = s.replace(needle, replacement, 1)
-          p.write_text(s, encoding='utf-8')
+          replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 &&\n\t\t                                    extent.width <= 4096;\n\t\tif (likely_large_shadow_map) { return false; }\n\t}\n#endif\n\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) {\n\t\tconst auto& extent = state.color_info[0].desc.info.extent;\n\t\tconst bool likely_small_postfx = extent.width >= 64 && extent.height >= 64 &&\n\t\t                                  extent.width <= 1024 && extent.height <= 1024;\n\t\tif (likely_small_postfx) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
+          if needle not in s: raise SystemExit('performance baseline patch anchor not found')
+          draw.write_text(s.replace(needle, replacement, 1), encoding='utf-8')
+
+          # Break PrepareGraphicsBindings into the exact stages implicated by the first profile.
+          p = Path('src/graphics/host_gpu/renderer/pipeline/descriptors.cpp')
+          s = p.read_text(encoding='utf-8')
+          inc = '#include <atomic>\n'
+          if inc not in s: raise SystemExit('descriptor include anchor not found')
+          s = s.replace(inc, inc + '#include <chrono>\n#include <cstdio>\n', 1)
+
+          old = '''RenderExecutor::GraphicsBindings\nRenderExecutor::PrepareGraphicsBindings(const ShaderStageRuntime& vertex,\n                                        const ShaderStageRuntime& pixel, bool pixel_active) {\n\tGraphicsBindings bindings {\n\t    .vertex = PrepareBindings(vertex),\n\t};\n\tif (pixel_active) {\n\t\tbindings.pixel.emplace(PrepareBindings(pixel));\n\t}\n\tFindBuffers(bindings.vertex);\n\tif (bindings.pixel) {\n\t\tFindBuffers(*bindings.pixel);\n\t}\n\tPrepareBdaBindings(bindings.vertex, bindings.pixel ? &*bindings.pixel : nullptr);\n\tRebindBuffers(bindings.vertex);\n\tif (bindings.pixel) {\n\t\tRebindBuffers(*bindings.pixel);\n\t}\n\tRebindImages(bindings.vertex);\n\tif (bindings.pixel) {\n\t\tRebindImages(*bindings.pixel);\n\t}\n\treturn bindings;\n}'''
+          new = '''RenderExecutor::GraphicsBindings\nRenderExecutor::PrepareGraphicsBindings(const ShaderStageRuntime& vertex,\n                                        const ShaderStageRuntime& pixel, bool pixel_active) {\n#if defined(KYTY_DS_BINDING_PROFILE)\n\tusing Clock = std::chrono::steady_clock;\n\tstatic std::atomic<uint64_t> calls {0}, prepare_ns {0}, find_ns {0}, bda_ns {0},\n\t                             buffers_ns {0}, images_ns {0};\n\tconst auto t0 = Clock::now();\n#endif\n\tGraphicsBindings bindings {\n\t    .vertex = PrepareBindings(vertex),\n\t};\n\tif (pixel_active) {\n\t\tbindings.pixel.emplace(PrepareBindings(pixel));\n\t}\n#if defined(KYTY_DS_BINDING_PROFILE)\n\tconst auto t1 = Clock::now();\n#endif\n\tFindBuffers(bindings.vertex);\n\tif (bindings.pixel) {\n\t\tFindBuffers(*bindings.pixel);\n\t}\n#if defined(KYTY_DS_BINDING_PROFILE)\n\tconst auto t2 = Clock::now();\n#endif\n\tPrepareBdaBindings(bindings.vertex, bindings.pixel ? &*bindings.pixel : nullptr);\n#if defined(KYTY_DS_BINDING_PROFILE)\n\tconst auto t3 = Clock::now();\n#endif\n\tRebindBuffers(bindings.vertex);\n\tif (bindings.pixel) {\n\t\tRebindBuffers(*bindings.pixel);\n\t}\n#if defined(KYTY_DS_BINDING_PROFILE)\n\tconst auto t4 = Clock::now();\n#endif\n\tRebindImages(bindings.vertex);\n\tif (bindings.pixel) {\n\t\tRebindImages(*bindings.pixel);\n\t}\n#if defined(KYTY_DS_BINDING_PROFILE)\n\tconst auto t5 = Clock::now();\n\tconst auto ns = [](auto a, auto b) {\n\t\treturn static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(b - a).count());\n\t};\n\tprepare_ns.fetch_add(ns(t0, t1), std::memory_order_relaxed);\n\tfind_ns.fetch_add(ns(t1, t2), std::memory_order_relaxed);\n\tbda_ns.fetch_add(ns(t2, t3), std::memory_order_relaxed);\n\tbuffers_ns.fetch_add(ns(t3, t4), std::memory_order_relaxed);\n\timages_ns.fetch_add(ns(t4, t5), std::memory_order_relaxed);\n\tconst auto n = calls.fetch_add(1, std::memory_order_relaxed) + 1;\n\tif ((n & 255u) == 0) {\n\t\tstd::printf("DS_BIND_PROFILE calls=%llu prepare_ms=%.3f find_ms=%.3f bda_ms=%.3f buffers_ms=%.3f images_ms=%.3f\\n",\n\t\t            static_cast<unsigned long long>(n), prepare_ns.exchange(0) / 1000000.0,\n\t\t            find_ns.exchange(0) / 1000000.0, bda_ns.exchange(0) / 1000000.0,\n\t\t            buffers_ns.exchange(0) / 1000000.0, images_ns.exchange(0) / 1000000.0);\n\t}\n#endif\n\treturn bindings;\n}'''
+          if old not in s: raise SystemExit('PrepareGraphicsBindings profiler anchor not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
           '@ | python -
-          git diff -- src/graphics/host_gpu/renderer/renderDraw.cpp
+          git diff -- src/graphics/host_gpu/renderer/renderDraw.cpp src/graphics/host_gpu/renderer/pipeline/descriptors.cpp
 
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -88,7 +101,7 @@ jobs:
           target: desktop
           arch: win64_msvc2022_64
           cache: true
-      - name: Configure Release LTO PostFX performance build
+      - name: Configure Release LTO binding profiling build
         shell: cmd
         run: |
           cmake -S . -B _Build/windows ^
@@ -98,24 +111,24 @@ jobs:
             -DCMAKE_C_COMPILER=clang-cl ^
             -DCMAKE_CXX_COMPILER=clang-cl ^
             -DCMAKE_C_FLAGS="/DNOMINMAX" ^
-            -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SAFE_POSTFX_PERF=1" ^
+            -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_BINDING_PROFILE=1" ^
             -DKYTY_BUILD_ORIGIN=Fork ^
             -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 ^
-            -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-SHADOW-POSTFX-LTO ^
+            -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-BIND-PROFILE-LTO ^
             -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
       - name: Build
         shell: cmd
         run: |
-          cmake --build _Build/windows --target launcher --parallel > pr599-pr506-shadow-postfx-build.log 2>&1
+          cmake --build _Build/windows --target launcher --parallel > pr599-pr506-bind-profile-build.log 2>&1
           set "rc=%ERRORLEVEL%"
-          type pr599-pr506-shadow-postfx-build.log
+          type pr599-pr506-bind-profile-build.log
           exit /b %rc%
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: PR599-PR506-Shadow-PostFX-Windows-build-log
-          path: pr599-pr506-shadow-postfx-build.log
+          name: PR599-PR506-Binding-Profile-Windows-build-log
+          path: pr599-pr506-bind-profile-build.log
           if-no-files-found: warn
           retention-days: 7
       - name: Install
@@ -124,6 +137,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-PR599-PR506-DS-SHADOW-POSTFX-LTO
+          name: KytyPS5-Windows-x64-PR599-PR506-DS-BIND-PROFILE-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
