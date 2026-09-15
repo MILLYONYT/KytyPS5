@@ -53,9 +53,7 @@ jobs:
             'src/graphics/host_gpu/renderer/cache/gpuResourceManager.h'
           )
           foreach ($path in $pr562Wins) { git checkout FETCH_HEAD -- $path; git add -- $path }
-          # PR506's pm4Handlers/graphicsRun require the PR506 CommandProcessor release-mem batching API.
           git checkout a6ebfb5208b61852b4e3f34c03bda677f2861533 -- src/graphics/guest_gpu/command_processor/commandProcessor.h
-          git add -- src/graphics/guest_gpu/command_processor/commandProcessor.h
           git add -A
           $unmerged = git diff --name-only --diff-filter=U
           if ($unmerged) { Write-Error "Unresolved PR562 merge conflicts remain: $unmerged"; exit 1 }
@@ -64,56 +62,42 @@ jobs:
           if ($LASTEXITCODE -ne 1) { Write-Error "git grep conflict-marker check failed with exit code $LASTEXITCODE"; exit 1 }
           $global:LASTEXITCODE = 0
 
-      - name: Restore PR599 LOD stats compatibility
+      - name: Restore PR599 compatibility APIs
         shell: pwsh
         run: |
+          git show fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7:src/graphics/host_gpu/renderer/cache/bufferCache.cpp | Out-File -Encoding utf8 _pr599_bufferCache.cpp
           @'
           from pathlib import Path
           h = Path('src/graphics/host_gpu/renderer/cache/bufferCache.h')
           s = h.read_text(encoding='utf-8')
           anchor = '\t[[nodiscard]] Buffer* GetFaultBuffer() noexcept { return m_fault_manager.GetFaultBuffer(); }\n'
-          if anchor not in s: raise SystemExit('BufferCache LOD declaration anchor not found')
-          s = s.replace(anchor, anchor + '\tvoid ReportLodStats(void* dst, uint32_t size, bool reset);\n', 1)
-          h.write_text(s, encoding='utf-8')
+          if 'void ReportLodStats(' not in s:
+              if anchor not in s: raise SystemExit('BufferCache LOD declaration anchor not found')
+              s = s.replace(anchor, anchor + '\tvoid ReportLodStats(void* dst, uint32_t size, bool reset);\n', 1)
+              h.write_text(s, encoding='utf-8')
 
           cpp = Path('src/graphics/host_gpu/renderer/cache/bufferCache.cpp')
           s = cpp.read_text(encoding='utf-8')
-          anchor = 'BufferCache::BufferCache(GraphicContext& graphics, CommandScheduler& scheduler,'
-          if anchor not in s: raise SystemExit('BufferCache constructor anchor not found')
-          impl = '''void BufferCache::ReportLodStats(void* dst, uint32_t size, bool reset) {
-\tEXIT_IF(dst == nullptr || size != 0x840);
-\tauto& command = m_scheduler.Current();
-\tcommand.EndRendering();
-\tvk::BufferMemoryBarrier barrier {};
-\tbarrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
-\tbarrier.dstAccessMask = vk::AccessFlagBits::eHostRead;
-\tbarrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-\tbarrier.buffer = m_lod_stats_buffer.Handle();
-\tbarrier.size = 256 * 16;
-\tcommand.Handle().pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
-\t    vk::PipelineStageFlagBits::eHost, {}, 0, nullptr, 1, &barrier, 0, nullptr);
-\tm_scheduler.Finish();
-\tm_lod_stats_buffer.Invalidate(0, 256 * 16);
-\tauto* words = reinterpret_cast<uint32_t*>(m_lod_stats_buffer.Mapped().data());
-\tstd::memset(dst, 0, size);
-\tconst uint32_t ready = 1;
-\tstd::memcpy(dst, &ready, sizeof(ready));
-\tfor (uint32_t i = 0; i < 256; ++i) {
-\t\tconst uint64_t entry = (uint64_t(words[i * 4] & 15u) << 56u) |
-\t\t    (uint64_t(std::min(words[i * 4 + 1], 0xffffffu)) << 32u) | words[i * 4 + 1];
-\t\tstd::memcpy(static_cast<uint8_t*>(dst) + 64 + i * 8, &entry, sizeof(entry));
-\t\tif (reset) {
-\t\t\twords[i * 4] = 15;
-\t\t\twords[i * 4 + 1] = words[i * 4 + 2] = words[i * 4 + 3] = 0;
-\t\t}
-\t}
-\tif (reset) m_lod_stats_buffer.Flush(0, 256 * 16);
-}
+          if 'void BufferCache::ReportLodStats(' not in s:
+              ref = Path('_pr599_bufferCache.cpp').read_text(encoding='utf-8-sig')
+              begin = ref.index('void BufferCache::ReportLodStats(')
+              end = ref.index('BufferCache::BufferCache(', begin)
+              impl = ref[begin:end]
+              anchor = 'BufferCache::BufferCache('
+              if anchor not in s: raise SystemExit('BufferCache constructor anchor not found')
+              s = s.replace(anchor, impl + anchor, 1)
+              cpp.write_text(s, encoding='utf-8')
 
-'''
-          s = s.replace(anchor, impl + anchor, 1)
-          cpp.write_text(s, encoding='utf-8')
+          cp = Path('src/graphics/guest_gpu/command_processor/commandProcessor.h')
+          s = cp.read_text(encoding='utf-8')
+          if 'void ReportLodStats(' not in s:
+              anchor = '\tvoid WriteReferenceClock(uint64_t dst_address, uint32_t num_bytes);\n'
+              if anchor not in s: raise SystemExit('CommandProcessor LOD anchor not found')
+              wrapper = '\tvoid ReportLodStats(void* dst, uint32_t size, bool reset) { GetGpuResources().GetBufferCache().ReportLodStats(dst, size, reset); }\n'
+              s = s.replace(anchor, anchor + wrapper, 1)
+              cp.write_text(s, encoding='utf-8')
           '@ | python -
+          Remove-Item _pr599_bufferCache.cpp
 
       - name: Apply frozen Build 13 performance patches
         shell: pwsh
