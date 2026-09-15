@@ -1,4 +1,4 @@
-name: PR599 + PR506 Demon Souls Selective Shadow Profiling Build
+name: PR599 + PR506 Demon Souls Selective Shadow PostFX Performance Build
 
 on:
   push:
@@ -41,50 +41,17 @@ jobs:
           if ($LASTEXITCODE -ne 1) { Write-Error "git grep conflict-marker check failed with exit code $LASTEXITCODE"; exit 1 }
           $global:LASTEXITCODE = 0
 
-      - name: Apply selective shadow baseline and aggregate profiling
+      - name: Apply selective shadow and conservative PostFX skipping
         shell: pwsh
         run: |
           @'
           from pathlib import Path
           p = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
           s = p.read_text(encoding='utf-8')
-
           needle = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
-          replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 &&\n\t\t                                    extent.width <= 4096;\n\t\tif (likely_large_shadow_map) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
-          if needle not in s: raise SystemExit('selective shadow patch anchor not found')
+          replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 &&\n\t\t                                    extent.width <= 4096;\n\t\tif (likely_large_shadow_map) { return false; }\n\t}\n#endif\n\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\t// Conservative first PostFX experiment: skip only small, color-only fullscreen-style\n\t// intermediate passes. Preserve depth-dependent passes and large/full-resolution outputs\n\t// so temporal AA/reconstruction and the main scene path remain intact.\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) {\n\t\tconst auto& extent = state.color_info[0].desc.info.extent;\n\t\tconst bool likely_small_postfx = extent.width >= 64 && extent.height >= 64 &&\n\t\t                                  extent.width <= 1024 && extent.height <= 1024;\n\t\tif (likely_small_postfx) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
+          if needle not in s: raise SystemExit('selective shadow/PostFX patch anchor not found')
           s = s.replace(needle, replacement, 1)
-
-          include_anchor = '#include <cstring>\n'
-          if include_anchor not in s: raise SystemExit('include anchor not found')
-          s = s.replace(include_anchor, include_anchor + '#include <chrono>\n', 1)
-
-          fn_anchor = '''bool RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buffer,\n                                         const DrawCallInfo& draw, DrawRenderState& state,'''
-          if fn_anchor not in s: raise SystemExit('draw function anchor not found')
-          timer = '''#if defined(KYTY_DS_DRAW_PROFILE)\n\tusing DsProfileClock = std::chrono::steady_clock;\n\tstatic std::atomic<uint64_t> prof_draws {0}, prof_bind_ns {0}, prof_vertex_ns {0},\n\t                             prof_targets_ns {0}, prof_pipeline_ns {0};\n\tconst auto prof_begin = DsProfileClock::now();\n#endif\n'''
-          body_anchor = '''\tif (mesh_active && emit.indexed) {'''
-          idx = s.find(body_anchor, s.find(fn_anchor))
-          if idx < 0: raise SystemExit('profile body anchor not found')
-          s = s[:idx] + timer + s[idx:]
-
-          bind_end = '''\tauto bindings = PrepareGraphicsBindings(state.vs_input_info.stage, state.ps_input_info.stage,\n\t                                        state.ps_active);'''
-          bind_new = bind_end + '''\n#if defined(KYTY_DS_DRAW_PROFILE)\n\tconst auto prof_after_bind = DsProfileClock::now();\n#endif'''
-          if bind_end not in s: raise SystemExit('bindings anchor not found')
-          s = s.replace(bind_end, bind_new, 1)
-
-          vertex_end = '''\t\tindex_binding   = PrepareIndexBuffer(buffer, index_source);\n\t}'''
-          vertex_new = vertex_end + '''\n#if defined(KYTY_DS_DRAW_PROFILE)\n\tconst auto prof_after_vertex = DsProfileClock::now();\n#endif'''
-          if vertex_end not in s: raise SystemExit('vertex anchor not found')
-          s = s.replace(vertex_end, vertex_new, 1)
-
-          target_end = '''\tconst auto rendering =\n\t    AcquireRenderTargets(buffer, state.color_info, state.color_count, state.depth_info,\n\t                         bindings.pixel);'''
-          target_new = target_end + '''\n#if defined(KYTY_DS_DRAW_PROFILE)\n\tconst auto prof_after_targets = DsProfileClock::now();\n#endif'''
-          if target_end not in s: raise SystemExit('targets anchor not found')
-          s = s.replace(target_end, target_new, 1)
-
-          pipeline_end = '''\tauto& pipeline = m_context.GetPipelineCache().CreateGraphicsPipeline(\n\t    std::span {state.color_info, state.color_count}, state.depth_info, state.vs_input_info, buffer,\n\t    state.ps_active ? &state.ps_input_info : nullptr, topology, primitive_restart_enable,\n\t    state.programs.vertex, state.programs.pixel);'''
-          pipeline_new = pipeline_end + '''\n#if defined(KYTY_DS_DRAW_PROFILE)\n\tconst auto prof_after_pipeline = DsProfileClock::now();\n\tconst auto ns = [](auto a, auto b) { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(b - a).count()); };\n\tprof_bind_ns.fetch_add(ns(prof_begin, prof_after_bind), std::memory_order_relaxed);\n\tprof_vertex_ns.fetch_add(ns(prof_after_bind, prof_after_vertex), std::memory_order_relaxed);\n\tprof_targets_ns.fetch_add(ns(prof_after_vertex, prof_after_targets), std::memory_order_relaxed);\n\tprof_pipeline_ns.fetch_add(ns(prof_after_targets, prof_after_pipeline), std::memory_order_relaxed);\n\tconst auto n = prof_draws.fetch_add(1, std::memory_order_relaxed) + 1;\n\tif ((n & 255u) == 0) {\n\t\tstd::printf("DS_PROFILE draws=%llu bind_ms=%.3f vertex_ms=%.3f targets_ms=%.3f pipeline_ms=%.3f\\n",\n\t\t            static_cast<unsigned long long>(n),\n\t\t            prof_bind_ns.exchange(0) / 1000000.0, prof_vertex_ns.exchange(0) / 1000000.0,\n\t\t            prof_targets_ns.exchange(0) / 1000000.0, prof_pipeline_ns.exchange(0) / 1000000.0);\n\t}\n#endif'''
-          if pipeline_end not in s: raise SystemExit('pipeline anchor not found')
-          s = s.replace(pipeline_end, pipeline_new, 1)
           p.write_text(s, encoding='utf-8')
           '@ | python -
           git diff -- src/graphics/host_gpu/renderer/renderDraw.cpp
@@ -121,7 +88,7 @@ jobs:
           target: desktop
           arch: win64_msvc2022_64
           cache: true
-      - name: Configure Release LTO profiling build
+      - name: Configure Release LTO PostFX performance build
         shell: cmd
         run: |
           cmake -S . -B _Build/windows ^
@@ -131,24 +98,24 @@ jobs:
             -DCMAKE_C_COMPILER=clang-cl ^
             -DCMAKE_CXX_COMPILER=clang-cl ^
             -DCMAKE_C_FLAGS="/DNOMINMAX" ^
-            -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_DRAW_PROFILE=1" ^
+            -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SAFE_POSTFX_PERF=1" ^
             -DKYTY_BUILD_ORIGIN=Fork ^
             -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 ^
-            -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-SHADOW-PROFILE-LTO ^
+            -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-SHADOW-POSTFX-LTO ^
             -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
       - name: Build
         shell: cmd
         run: |
-          cmake --build _Build/windows --target launcher --parallel > pr599-pr506-shadow-profile-build.log 2>&1
+          cmake --build _Build/windows --target launcher --parallel > pr599-pr506-shadow-postfx-build.log 2>&1
           set "rc=%ERRORLEVEL%"
-          type pr599-pr506-shadow-profile-build.log
+          type pr599-pr506-shadow-postfx-build.log
           exit /b %rc%
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: PR599-PR506-Shadow-Profile-Windows-build-log
-          path: pr599-pr506-shadow-profile-build.log
+          name: PR599-PR506-Shadow-PostFX-Windows-build-log
+          path: pr599-pr506-shadow-postfx-build.log
           if-no-files-found: warn
           retention-days: 7
       - name: Install
@@ -157,6 +124,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-PR599-PR506-DS-SHADOW-PROFILE-LTO
+          name: KytyPS5-Windows-x64-PR599-PR506-DS-SHADOW-POSTFX-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
