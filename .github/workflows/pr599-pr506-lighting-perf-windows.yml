@@ -1,4 +1,4 @@
-name: Demon Souls Build39 Sampled Format Backing Flicker Fix Build
+name: Demon Souls Build40 Sampled Swizzle Flicker Fix Build
 
 on:
   push:
@@ -33,13 +33,13 @@ jobs:
           if ($unmerged) { Write-Error "Unresolved merge conflicts remain: $unmerged"; exit 1 }
           $global:LASTEXITCODE = 0
 
-      - name: Apply Build32 keeper and B39 sampled format backing fix
+      - name: Apply Build32 keeper and B40 sampled swizzle fix
         shell: pwsh
         run: |
           @'
           from pathlib import Path
 
-          # Return to Build32 + PR506/VMA keeper. B33-B38 experiments are excluded.
+          # Return to Build32 + PR506/VMA keeper. B33-B39 experiments are excluded.
           draw = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
           s = draw.read_text(encoding='utf-8')
           needle = '\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
@@ -54,17 +54,16 @@ jobs:
           if old not in s: raise SystemExit('VMA anchor not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
 
-          # B39: SameBacking accepts any Vulkan-compatible format class and the candidate loop
-          # lets the last compatible image win. A guest range can therefore oscillate between an
-          # exact-format native image and a compatible reinterpretation depending on cache order.
-          # For sampled textures only, prefer an exact pixel-format backing when one exists while
-          # retaining the compatible fallback required by normal aliasing. This avoids B38's broad
-          # layout rejection and should preserve the Build32 performance behavior.
-          p = Path('src/graphics/host_gpu/renderer/cache/textureCache.cpp')
+          # B40: sampled descriptors calculate the correct guest DstSel -> host-storage component
+          # mapping before cache lookup. When the backing image is an existing render target with a
+          # different host storage ordering, that mapping was still based on the sampled descriptor's
+          # nominal format. Rebuild only the sampled view mapping from the actual backing format's
+          # storage order. No cache ownership, synchronization, or layout policy is changed.
+          p = Path('src/graphics/host_gpu/renderer/pipeline/descriptors.cpp')
           s = p.read_text(encoding='utf-8')
-          old = '''\t\tfor (const auto id: candidates) {\n\t\t\tconst auto& image = m_slot_images[id];\n\t\t\tif (SameBacking(image.info, desc.info, exact_format)) {\n\t\t\t\tresult = id;\n\t\t\t}\n\t\t}'''
-          new = '''\t\tfor (const auto id: candidates) {\n\t\t\tconst auto& image = m_slot_images[id];\n\t\t\tif (SameBacking(image.info, desc.info, exact_format)) {\n#if defined(KYTY_DS_PREFER_EXACT_SAMPLED_FORMAT)\n\t\t\t\tif (desc.type == BindingType::Texture) {\n\t\t\t\t\tconst bool candidate_exact = image.info.pixel_format == desc.info.pixel_format;\n\t\t\t\t\tconst bool current_exact = result &&\n\t\t\t\t\t    m_slot_images[result].info.pixel_format == desc.info.pixel_format;\n\t\t\t\t\tif (current_exact && !candidate_exact) {\n\t\t\t\t\t\tcontinue;\n\t\t\t\t\t}\n\t\t\t\t}\n#endif\n\t\t\t\tresult = id;\n\t\t\t}\n\t\t}'''
-          if old not in s: raise SystemExit('SameBacking candidate anchor not found')
+          old = '''\t} else {\n\t\t(void)SelectSampledColorView(image->info.pixel_format, pixel_format,\n\t\t                             descriptor.DstSelXYZW());\n\t}\n\treturn {id, nullptr, std::move(desc)};'''
+          new = '''\t} else {\n\t\t(void)SelectSampledColorView(image->info.pixel_format, pixel_format,\n\t\t                             descriptor.DstSelXYZW());\n#if defined(KYTY_DS_REMAP_REUSED_COLOR_SWIZZLE)\n\t\tif (!shader_conversion && image->info.pixel_format != pixel_format) {\n\t\t\tProspero::ColorComponentMapping backing_to_storage {};\n\t\t\tswitch (image->info.pixel_format) {\n\t\t\t\tcase vk::Format::eB8G8R8A8Unorm:\n\t\t\t\tcase vk::Format::eB8G8R8A8Snorm:\n\t\t\t\tcase vk::Format::eB8G8R8A8Srgb:\n\t\t\t\tcase vk::Format::eA2R10G10B10UnormPack32:\n\t\t\t\tcase vk::Format::eA1R5G5B5UnormPack16:\n\t\t\t\tcase vk::Format::eR5G6B5UnormPack16:\n\t\t\t\t\tbacking_to_storage = Prospero::ColorMappingBgra;\n\t\t\t\t\tbreak;\n\t\t\t\tcase vk::Format::eR4G4B4A4UnormPack16:\n\t\t\t\t\tbacking_to_storage = Prospero::ColorMappingAbgr;\n\t\t\t\t\tbreak;\n\t\t\t\tdefault: break;\n\t\t\t}\n\t\t\tdesc.view_info.mapping =\n\t\t\t    TextureGetComponentMapping(descriptor.DstSelXYZW(), backing_to_storage);\n\t\t}\n#endif\n\t}\n\treturn {id, nullptr, std::move(desc)};'''
+          if old not in s: raise SystemExit('sampled color view anchor not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
           '@ | python -
 
@@ -101,23 +100,23 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
 
-      - name: Configure Release LTO Build39 sampled format fix
+      - name: Configure Release LTO Build40 sampled swizzle fix
         shell: cmd
         run: |
-          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1 /DKYTY_DS_PREFER_EXACT_SAMPLED_FORMAT=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-B39-SAMPLED-FORMAT-FLICKER-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
+          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1 /DKYTY_DS_REMAP_REUSED_COLOR_SWIZZLE=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-B40-SAMPLED-SWIZZLE-FLICKER-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
       - name: Build
         shell: cmd
         run: |
-          cmake --build _Build/windows --target launcher --parallel > b39-sampled-format-flicker-build.log 2>&1
+          cmake --build _Build/windows --target launcher --parallel > b40-sampled-swizzle-flicker-build.log 2>&1
           set "rc=%ERRORLEVEL%"
-          type b39-sampled-format-flicker-build.log
+          type b40-sampled-swizzle-flicker-build.log
           exit /b %rc%
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: B39-Sampled-Format-Flicker-Windows-build-log
-          path: b39-sampled-format-flicker-build.log
+          name: B40-Sampled-Swizzle-Flicker-Windows-build-log
+          path: b40-sampled-swizzle-flicker-build.log
           if-no-files-found: warn
           retention-days: 7
       - name: Install
@@ -126,7 +125,7 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-B39-SAMPLED-FORMAT-FLICKER-LTO
+          name: KytyPS5-Windows-x64-B40-SAMPLED-SWIZZLE-FLICKER-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
           retention-days: 90
