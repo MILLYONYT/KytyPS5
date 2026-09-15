@@ -1,4 +1,4 @@
-name: PR599 + PR506 Demon Souls Build13 VMA 16MiB Performance Build
+name: PR599 + PR506 Demon Souls Build31 Flicker Fix Build
 
 on:
   push:
@@ -31,7 +31,7 @@ jobs:
           $unmerged = git diff --name-only --diff-filter=U
           if ($unmerged) { Write-Error "Unresolved merge conflicts remain: $unmerged"; exit 1 }
           $global:LASTEXITCODE = 0
-      - name: Apply frozen Build13 plus 16MiB VMA experiment
+      - name: Apply Build31 VMA16 plus flicker correctness experiment
         shell: pwsh
         run: |
           @'
@@ -39,13 +39,13 @@ jobs:
           draw = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
           s = draw.read_text(encoding='utf-8')
           needle = '\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
-          replacement = '\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 && extent.width <= 4096;\n\t\tif (likely_large_shadow_map) { return false; }\n\t}\n#endif\n\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) {\n\t\tconst auto& extent = state.color_info[0].desc.info.extent;\n\t\tconst bool likely_small_postfx = extent.width >= 64 && extent.height >= 64 && extent.width <= 1024 && extent.height <= 1024;\n\t\tif (likely_small_postfx) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
-          if needle not in s: raise SystemExit('Build13 render anchor not found')
+          replacement = '\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n// Flicker experiment: keep all depth-only shadow passes. Earlier builds skipped large\n// 1024-4096 square depth targets; sky/camera flicker survived every synchronization test,\n// so restore these producer passes to prevent consumers sampling stale shadow/depth history.\n\n#if defined(KYTY_DS_SAFE_POSTFX_PERF)\n\tif (!state.depth_info.image_id && state.color_count == 1 && state.ps_active) {\n\t\tconst auto& extent = state.color_info[0].desc.info.extent;\n\t\tconst bool likely_small_postfx = extent.width >= 64 && extent.height >= 64 && extent.width <= 1024 && extent.height <= 1024;\n\t\tif (likely_small_postfx) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
+          if needle not in s: raise SystemExit('render anchor not found')
           draw.write_text(s.replace(needle, replacement, 1), encoding='utf-8')
           p = Path('src/graphics/host_gpu/renderer/cache/streamBuffer.cpp')
           s = p.read_text(encoding='utf-8')
           old = '\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n\tVmaAllocationCreateInfo allocation_info {};'
-          new = '\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n#if defined(KYTY_DS_VMA_SUBALLOC_PERF)\n\t// Build13 proved VMA suballocation removes the measured dedicated-allocation stalls.\n\t// Extend the cutoff from 4 MiB to 16 MiB; exact guest ranges and BDA semantics stay intact.\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    (with_bda && size >= (16ull * 1024 * 1024)) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#else\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#endif\n\tVmaAllocationCreateInfo allocation_info {};'
+          new = '\tconst bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);\n#if defined(KYTY_DS_VMA_SUBALLOC_PERF)\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    (with_bda && size >= (16ull * 1024 * 1024)) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#else\n\tconst VmaAllocationCreateFlags bda_flag =\n\t    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;\n#endif\n\tVmaAllocationCreateInfo allocation_info {};'
           if old not in s: raise SystemExit('VMA anchor not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
           '@ | python -
@@ -81,23 +81,23 @@ jobs:
           target: desktop
           arch: win64_msvc2022_64
           cache: true
-      - name: Configure Release LTO Build13 VMA16 build
+      - name: Configure Release LTO Build31 flicker fix
         shell: cmd
         run: |
-          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-B13-VMA16-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
+          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-B31-FLICKER-FIX-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
       - name: Build
         shell: cmd
         run: |
-          cmake --build _Build/windows --target launcher --parallel > b13-vma16-build.log 2>&1
+          cmake --build _Build/windows --target launcher --parallel > b31-flicker-fix-build.log 2>&1
           set "rc=%ERRORLEVEL%"
-          type b13-vma16-build.log
+          type b31-flicker-fix-build.log
           exit /b %rc%
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: B13-VMA16-Windows-build-log
-          path: b13-vma16-build.log
+          name: B31-Flicker-Fix-Windows-build-log
+          path: b31-flicker-fix-build.log
           if-no-files-found: warn
           retention-days: 7
       - name: Install
@@ -106,6 +106,6 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-B13-VMA16-LTO
+          name: KytyPS5-Windows-x64-B31-FLICKER-FIX-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
