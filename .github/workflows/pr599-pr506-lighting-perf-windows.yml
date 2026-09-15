@@ -1,4 +1,4 @@
-name: PR599 + PR506 Demon Souls Selective Shadow Sync Performance Build
+name: PR599 + PR506 Demon Souls Selective Shadow Profiling Build
 
 on:
   push:
@@ -26,61 +26,73 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git fetch https://github.com/Techx3/KytyPS5.git a6ebfb5208b61852b4e3f34c03bda677f2861533
           cmd /c "git cherry-pick --no-commit a6ebfb5208b61852b4e3f34c03bda677f2861533 || exit /b 0"
-
           $pr599Wins = @(
             'src/graphics/host_gpu/renderer/pipeline/pipelineCache.cpp',
             'src/graphics/host_gpu/renderer/renderCompute.cpp',
             'src/graphics/shader/recompiler/ir/passes/ResourceMaterialization.cpp',
             'src/graphics/shader/recompiler/ir/passes/SrtWalker.h'
           )
-          foreach ($path in $pr599Wins) {
-            git restore --source=HEAD --staged --worktree -- $path
-          }
+          foreach ($path in $pr599Wins) { git restore --source=HEAD --staged --worktree -- $path }
           git add -A
-
           $unmerged = git diff --name-only --diff-filter=U
-          if ($unmerged) {
-            Write-Error "Unresolved merge conflicts remain: $unmerged"
-            exit 1
-          }
-          if (git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- src) {
-            Write-Error "Unresolved merge markers remain after PR506 adaptation"
-            exit 1
-          }
-          git status --short
+          if ($unmerged) { Write-Error "Unresolved merge conflicts remain: $unmerged"; exit 1 }
+          if (git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- src) { Write-Error "Unresolved merge markers remain"; exit 1 }
 
-      - name: Apply selective shadow and draw synchronization experiment
+      - name: Apply selective shadow baseline and aggregate profiling
         shell: pwsh
         run: |
           @'
           from pathlib import Path
-
           p = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
           s = p.read_text(encoding='utf-8')
 
           needle = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
-          replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\t// Preserve the proven selective-shadow optimization: skip only large square\n\t// depth-only off-screen targets, leaving reflections and smaller shadows intact.\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 &&\n\t\t                                    extent.width <= 4096;\n\t\tif (likely_large_shadow_map) {\n\t\t\treturn false;\n\t\t}\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
-          if needle not in s:
-              raise SystemExit('selective shadow patch anchor not found')
+          replacement = '''\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\n#if defined(KYTY_DS_SELECTIVE_SHADOW_PERF)\n\tif (state.depth_info.image_id && state.color_count == 0) {\n\t\tconst auto& extent = state.depth_info.desc.info.extent;\n\t\tconst bool likely_large_shadow_map = extent.width == extent.height && extent.width >= 1024 &&\n\t\t                                    extent.width <= 4096;\n\t\tif (likely_large_shadow_map) { return false; }\n\t}\n#endif\n\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'''
+          if needle not in s: raise SystemExit('selective shadow patch anchor not found')
           s = s.replace(needle, replacement, 1)
 
-          # PR599 already keeps compatible rendering open across draws. Its conservative\n          # shader-write path ends rendering and emits a global shader memory barrier.\n          # For depth-only passes with no active pixel shader, vertex/mesh storage writes\n          # are uncommon and forcing an attachment boundary is especially expensive.\n          # Keep correctness for actual shader-buffer writers, but avoid treating inactive\n          # fragment stages as possible writers and use the narrower stage set already\n          # computed by PR599.
-          old = '''\tif (state.ps_active && HasShaderBufferWrites(state.ps_input_info.stage)) {\n\t\tshader_write_stages |= vk::PipelineStageFlagBits::eFragmentShader;\n\t}\n\tif (shader_write_stages) {\n\t\tm_context.GetCommandScheduler().EndRendering();\n\t\tShaderWriteBarrier(vk_buffer, shader_write_stages);\n\t}'''
-          new = '''\tif (state.ps_active && HasShaderBufferWrites(state.ps_input_info.stage)) {\n\t\tshader_write_stages |= vk::PipelineStageFlagBits::eFragmentShader;\n\t}\n#if defined(KYTY_DS_SELECTIVE_SHADOW_SYNC_PERF)\n\t// No barrier is needed when neither active graphics stage writes storage. This\n\t// explicit fast path keeps compatible shadow/lighting rendering chained and\n\t// avoids an unnecessary scheduler boundary on the common read-only draw path.\n\tif (shader_write_stages != vk::PipelineStageFlags {}) {\n\t\tm_context.GetCommandScheduler().EndRendering();\n\t\tShaderWriteBarrier(vk_buffer, shader_write_stages);\n\t}\n#else\n\tif (shader_write_stages) {\n\t\tm_context.GetCommandScheduler().EndRendering();\n\t\tShaderWriteBarrier(vk_buffer, shader_write_stages);\n\t}\n#endif'''
-          if old not in s:
-              raise SystemExit('shader barrier patch anchor not found')
-          s = s.replace(old, new, 1)
+          # Lightweight aggregate CPU-side draw profiling. We intentionally report only every
+          # 256 prepared draws to avoid per-draw logging overhead. The buckets isolate resource
+          # binding, vertex/index preparation, render-target acquisition, and pipeline creation.
+          include_anchor = '#include <cstring>\n'
+          if include_anchor not in s: raise SystemExit('include anchor not found')
+          s = s.replace(include_anchor, include_anchor + '#include <chrono>\n', 1)
+
+          fn_anchor = '''bool RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buffer,\n                                         const DrawCallInfo& draw, DrawRenderState& state,'''
+          if fn_anchor not in s: raise SystemExit('draw function anchor not found')
+          timer = '''#if defined(KYTY_DS_DRAW_PROFILE)\n\tusing DsProfileClock = std::chrono::steady_clock;\n\tstatic std::atomic<uint64_t> prof_draws {0}, prof_bind_ns {0}, prof_vertex_ns {0},\n\t                             prof_targets_ns {0}, prof_pipeline_ns {0};\n\tconst auto prof_begin = DsProfileClock::now();\n#endif\n'''
+          body_anchor = '''\tif (mesh_active && emit.indexed) {'''
+          idx = s.find(body_anchor, s.find(fn_anchor))
+          if idx < 0: raise SystemExit('profile body anchor not found')
+          s = s[:idx] + timer + s[idx:]
+
+          bind_end = '''\tauto bindings = PrepareGraphicsBindings(state.vs_input_info.stage, state.ps_input_info.stage,\n\t                                        state.ps_active);'''
+          bind_new = bind_end + '''\n#if defined(KYTY_DS_DRAW_PROFILE)\n\tconst auto prof_after_bind = DsProfileClock::now();\n#endif'''
+          if bind_end not in s: raise SystemExit('bindings anchor not found')
+          s = s.replace(bind_end, bind_new, 1)
+
+          vertex_end = '''\t\tindex_binding   = PrepareIndexBuffer(buffer, index_source);\n\t}'''
+          vertex_new = vertex_end + '''\n#if defined(KYTY_DS_DRAW_PROFILE)\n\tconst auto prof_after_vertex = DsProfileClock::now();\n#endif'''
+          if vertex_end not in s: raise SystemExit('vertex anchor not found')
+          s = s.replace(vertex_end, vertex_new, 1)
+
+          target_end = '''\tconst auto rendering =\n\t    AcquireRenderTargets(buffer, state.color_info, state.color_count, state.depth_info,\n\t                         bindings.pixel);'''
+          target_new = target_end + '''\n#if defined(KYTY_DS_DRAW_PROFILE)\n\tconst auto prof_after_targets = DsProfileClock::now();\n#endif'''
+          if target_end not in s: raise SystemExit('targets anchor not found')
+          s = s.replace(target_end, target_new, 1)
+
+          pipeline_end = '''\tauto& pipeline = m_context.GetPipelineCache().CreateGraphicsPipeline(\n\t    std::span {state.color_info, state.color_count}, state.depth_info, state.vs_input_info, buffer,\n\t    state.ps_active ? &state.ps_input_info : nullptr, topology, primitive_restart_enable,\n\t    state.programs.vertex, state.programs.pixel);'''
+          pipeline_new = pipeline_end + '''\n#if defined(KYTY_DS_DRAW_PROFILE)\n\tconst auto prof_after_pipeline = DsProfileClock::now();\n\tconst auto ns = [](auto a, auto b) { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(b - a).count()); };\n\tprof_bind_ns.fetch_add(ns(prof_begin, prof_after_bind), std::memory_order_relaxed);\n\tprof_vertex_ns.fetch_add(ns(prof_after_bind, prof_after_vertex), std::memory_order_relaxed);\n\tprof_targets_ns.fetch_add(ns(prof_after_vertex, prof_after_targets), std::memory_order_relaxed);\n\tprof_pipeline_ns.fetch_add(ns(prof_after_targets, prof_after_pipeline), std::memory_order_relaxed);\n\tconst auto n = prof_draws.fetch_add(1, std::memory_order_relaxed) + 1;\n\tif ((n & 255u) == 0) {\n\t\tstd::printf("DS_PROFILE draws=%llu bind_ms=%.3f vertex_ms=%.3f targets_ms=%.3f pipeline_ms=%.3f\\n",\n\t\t            static_cast<unsigned long long>(n),\n\t\t            prof_bind_ns.exchange(0) / 1000000.0, prof_vertex_ns.exchange(0) / 1000000.0,\n\t\t            prof_targets_ns.exchange(0) / 1000000.0, prof_pipeline_ns.exchange(0) / 1000000.0);\n\t}\n#endif'''
+          if pipeline_end not in s: raise SystemExit('pipeline anchor not found')
+          s = s.replace(pipeline_end, pipeline_new, 1)
           p.write_text(s, encoding='utf-8')
           '@ | python -
-
           git diff -- src/graphics/host_gpu/renderer/renderDraw.cpp
 
       - name: Setup Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
-
       - name: Setup Ninja
         uses: seanmiddleditch/gha-setup-ninja@v5
-
       - name: Locate vcpkg
         id: vcpkg
         shell: pwsh
@@ -89,23 +101,18 @@ jobs:
           $portHash = (Get-FileHash "$vcpkgRoot\ports\glslang\vcpkg.json" -Algorithm SHA256).Hash
           "root=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "port_hash=$($portHash.ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-
       - name: Cache glslang
         id: glslang_cache
         uses: actions/cache@v4
         with:
           path: ${{ steps.vcpkg.outputs.root }}\installed\x64-windows
           key: glslang-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg.outputs.port_hash }}-tools-opt
-
       - name: Install glslang
         shell: pwsh
         run: |
           $vcpkgRoot = "${{ steps.vcpkg.outputs.root }}"
-          if ("${{ steps.glslang_cache.outputs.cache-hit }}" -ne "true") {
-            vcpkg install glslang[tools,opt]:x64-windows
-          }
+          if ("${{ steps.glslang_cache.outputs.cache-hit }}" -ne "true") { vcpkg install glslang[tools,opt]:x64-windows }
           "$vcpkgRoot\installed\x64-windows\tools\glslang" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
       - name: Install Qt 6.10.3
         uses: jurplel/install-qt-action@v4
         with:
@@ -114,8 +121,7 @@ jobs:
           target: desktop
           arch: win64_msvc2022_64
           cache: true
-
-      - name: Configure Release LTO selective-shadow-sync build
+      - name: Configure Release LTO profiling build
         shell: cmd
         run: |
           cmake -S . -B _Build/windows ^
@@ -125,36 +131,32 @@ jobs:
             -DCMAKE_C_COMPILER=clang-cl ^
             -DCMAKE_CXX_COMPILER=clang-cl ^
             -DCMAKE_C_FLAGS="/DNOMINMAX" ^
-            -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_SELECTIVE_SHADOW_SYNC_PERF=1" ^
+            -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SELECTIVE_SHADOW_PERF=1 /DKYTY_DS_DRAW_PROFILE=1" ^
             -DKYTY_BUILD_ORIGIN=Fork ^
             -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 ^
-            -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-SELECTIVE-SHADOW-SYNC-LTO ^
+            -DKYTY_RELEASE_TAG=KytyPS5-PR599-PR506-DS-SHADOW-PROFILE-LTO ^
             -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
-
       - name: Build
         shell: cmd
         run: |
-          cmake --build _Build/windows --target launcher --parallel > pr599-pr506-selective-shadow-sync-build.log 2>&1
+          cmake --build _Build/windows --target launcher --parallel > pr599-pr506-shadow-profile-build.log 2>&1
           set "rc=%ERRORLEVEL%"
-          type pr599-pr506-selective-shadow-sync-build.log
+          type pr599-pr506-shadow-profile-build.log
           exit /b %rc%
-
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: PR599-PR506-Selective-Shadow-Sync-Windows-build-log
-          path: pr599-pr506-selective-shadow-sync-build.log
+          name: PR599-PR506-Shadow-Profile-Windows-build-log
+          path: pr599-pr506-shadow-profile-build.log
           if-no-files-found: warn
           retention-days: 7
-
       - name: Install
         shell: cmd
         run: cmake --install _Build/windows --prefix _Build/windows/install
-
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KytyPS5-Windows-x64-PR599-PR506-DS-SELECTIVE-SHADOW-SYNC-LTO
+          name: KytyPS5-Windows-x64-PR599-PR506-DS-SHADOW-PROFILE-LTO
           path: _Build/windows/install/**
           if-no-files-found: error
