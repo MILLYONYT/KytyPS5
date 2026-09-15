@@ -39,7 +39,6 @@ jobs:
           @'
           from pathlib import Path
 
-          # Clean Build32 + PR506/VMA baseline. B33-B43 experiments are excluded.
           draw = Path('src/graphics/host_gpu/renderer/renderDraw.cpp')
           s = draw.read_text(encoding='utf-8')
           needle = '\tstate.ps_active       = DrawHasActivePixelShader(buffer);\n\tif (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {'
@@ -47,19 +46,13 @@ jobs:
           if needle not in s: raise SystemExit('render anchor not found')
           s = s.replace(needle, replacement, 1)
 
-          # B44 diagnostic: expose draw-level GPU markers with shader addresses, target dimensions,
-          # sampled/storage image counts and primitive counts. RenderDoc/NSight/RGP can use these
-          # markers to identify the exact expensive sky/atmosphere pass and whether frame time is
-          # concentrated in a handful of full-screen passes. No extra barriers or cache changes.
-          include_anchor = '#include <unordered_map>\n#include <vector>'
-          if include_anchor not in s: raise SystemExit('include anchor not found')
-          s = s.replace(include_anchor, '#include <unordered_map>\n#include <string>\n#include <vector>', 1)
-
+          # B44 compile-safe diagnostic. Use the existing logger instead of assuming shader address
+          # fields or a Vulkan label helper. This records the draw characteristics we need in the
+          # emulator log, which is especially useful for the final 10-15 seconds at the flicker spot.
           anchor = '''\tconst auto rendering =\n\t    AcquireRenderTargets(buffer, state.color_info, state.color_count, state.depth_info,\n\t                         bindings.pixel);'''
-          diag = '''#if defined(KYTY_DS_DRAW_PROFILE_MARKERS)\n\t{\n\t\tuint32_t sampled_images = 0;\n\t\tuint32_t storage_images = 0;\n\t\tif (bindings.pixel) {\n\t\t\tfor (const auto& image: bindings.pixel->images) {\n\t\t\t\tif (image.desc.type == TextureCache::BindingType::Storage) ++storage_images;\n\t\t\t\telse ++sampled_images;\n\t\t\t}\n\t\t}\n\t\tuint32_t rt_width = 0, rt_height = 0;\n\t\tif (state.color_count != 0) {\n\t\t\trt_width = state.color_info[0].desc.info.extent.width;\n\t\t\trt_height = state.color_info[0].desc.info.extent.height;\n\t\t}\n\t\tconst auto vs_addr = state.vs_input_info.stage.program->address;\n\t\tconst auto ps_addr = state.ps_active ? state.ps_input_info.stage.program->address : 0;\n\t\tconst auto label = fmt::format(\n\t\t    "DSDRAW VS={:x} PS={:x} RT={}x{} MRT={} SAMP={} UAV={} IDX={} INST={}",\n\t\t    vs_addr, ps_addr, rt_width, rt_height, state.color_count, sampled_images, storage_images,\n\t\t    draw.index_count, draw.instance_count);\n\t\tVulkanLabelScope profile_label(buffer.Handle(), label.c_str());\n\t}\n#endif\n\tconst auto rendering =\n\t    AcquireRenderTargets(buffer, state.color_info, state.color_count, state.depth_info,\n\t                         bindings.pixel);'''
+          diag = '''#if defined(KYTY_DS_DRAW_PROFILE_LOG)\n\t{\n\t\tuint32_t sampled_images = 0;\n\t\tuint32_t storage_images = 0;\n\t\tif (bindings.pixel) {\n\t\t\tfor (const auto& image: bindings.pixel->images) {\n\t\t\t\tif (image.desc.type == TextureCache::BindingType::Storage) ++storage_images;\n\t\t\t\telse ++sampled_images;\n\t\t\t}\n\t\t}\n\t\tuint32_t rt_width = 0, rt_height = 0;\n\t\tif (state.color_count != 0) {\n\t\t\trt_width = state.color_info[0].desc.info.extent.width;\n\t\t\trt_height = state.color_info[0].desc.info.extent.height;\n\t\t}\n\t\tstatic std::atomic<uint64_t> ds_profile_draw_id {0};\n\t\tconst auto profile_id = ds_profile_draw_id.fetch_add(1, std::memory_order_relaxed);\n\t\tLOG_INFO(Graphics, "DSDRAW id={} rt={}x{} mrt={} samp={} uav={} idx={} inst={} ps={} mesh={}\\n",\n\t\t         profile_id, rt_width, rt_height, state.color_count, sampled_images, storage_images,\n\t\t         draw.index_count, draw.instance_count, state.ps_active, mesh_active);\n\t}\n#endif\n\tconst auto rendering =\n\t    AcquireRenderTargets(buffer, state.color_info, state.color_count, state.depth_info,\n\t                         bindings.pixel);'''
           if anchor not in s: raise SystemExit('render acquisition anchor not found')
-          s = s.replace(anchor, diag, 1)
-          draw.write_text(s, encoding='utf-8')
+          draw.write_text(s.replace(anchor, diag, 1), encoding='utf-8')
 
           p = Path('src/graphics/host_gpu/renderer/cache/streamBuffer.cpp')
           s = p.read_text(encoding='utf-8')
@@ -105,7 +98,7 @@ jobs:
       - name: Configure Release LTO Build44 profiling diagnostic
         shell: cmd
         run: |
-          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1 /DKYTY_DS_DRAW_PROFILE_MARKERS=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-B44-DRAW-PROFILING-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
+          cmake -S . -B _Build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_FLAGS="/DNOMINMAX" -DCMAKE_CXX_FLAGS="/DNOMINMAX /EHsc /DKYTY_DS_SAFE_POSTFX_PERF=1 /DKYTY_DS_VMA_SUBALLOC_PERF=1 /DKYTY_DS_DRAW_PROFILE_LOG=1" -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=MILLYONYT/KytyPS5 -DKYTY_RELEASE_TAG=KytyPS5-B44-DRAW-PROFILING-LTO -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
       - name: Build
         shell: cmd
         run: |
